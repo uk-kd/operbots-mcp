@@ -6,10 +6,22 @@
     "mcp",
     "model-context-protocol",
     "claude",
+    "claude-code",
     "operbots",
     "telegram"
   ],
   "license": "MIT",
+  "author": "Nikita Belan",
+  "homepage": "https://github.com/uk-kd/operbots-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uk-kd/operbots-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/uk-kd/operbots-mcp/issues"
+  },
+  "//": "mcpName подтверждает владение пакетом при публикации в реестре MCP.",
+  "mcpName": "io.github.uk-kd/operbots-mcp",
   "type": "module",
   "bin": {
     "operbots-mcp": "dist/index.js"

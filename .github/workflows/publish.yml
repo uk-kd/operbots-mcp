@@ -1,0 +1,58 @@
+# Выпуск версии: сборка, проверка типов и публикация в npm.
+#
+# Срабатывает на метку вида v0.1.0. Перед меткой поднимите версию
+# командой `npm version patch` — она сама создаст и метку, и коммит.
+#
+# Нужен один секрет репозитория: NPM_TOKEN с правом публикации
+# (npmjs.com → Access Tokens → Granular, Read and write).
+
+name: Публикация
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Отметка о происхождении: npm показывает, из какого коммита и какой
+  # сборки собран пакет. Без этого права publish --provenance упадёт.
+  id-token: write
+
+jobs:
+  npm:
+    name: npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # Сборка выполняется скриптом prepare внутри npm ci.
+      - run: npm ci
+
+      - name: Проверка типов
+        run: npm run typecheck
+
+      - name: Проверка запуска
+        run: node dist/index.js --version
+
+      - name: Сверить версию пакета с меткой
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "Метка $GITHUB_REF_NAME не совпадает с версией пакета $pkg" >&2
+            exit 1
+          fi
+
+      - name: Публикация
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

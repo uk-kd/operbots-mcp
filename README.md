@@ -1,6 +1,6 @@
 # operbots-mcp
 
-MCP-сервер панели [operbots](https://github.com/nikitabelan/operbots): дела, боты,
+MCP-сервер панели [operbots](https://github.com/uk-kd/operbots): дела, боты,
 сценарии на полотне, диалоги, база знаний и подключения к ИИ — прямо из Claude Code.
 
 **Права те же, что у вас.** Сервер держит обычную пользовательскую сессию панели:
@@ -21,12 +21,26 @@ claude mcp add operbots -- npx -y operbots-mcp
 
 Готово. Проверить: `npx operbots-mcp status`.
 
-Пока пакет не опубликован в npm, вместо `operbots-mcp` подставляйте адрес
-репозитория — сборка выполнится при установке:
+### Через плагин Claude Code
+
+То же самое, но без второй команды: плагин сам пропишет сервер и будет
+обновляться вместе с репозиторием. В сессии Claude Code:
+
+```
+/plugin marketplace add uk-kd/operbots-mcp
+/plugin install operbots-mcp@operbots
+```
+
+Вход всё равно нужен один раз — `npx operbots-mcp login`.
+
+### Пока пакет не в npm
+
+Подставляйте адрес репозитория вместо имени пакета: сборка выполнится при
+установке.
 
 ```bash
-npx github:nikitabelan/operbots-mcp login
-claude mcp add operbots -- npx -y github:nikitabelan/operbots-mcp
+npx github:uk-kd/operbots-mcp login
+claude mcp add operbots -- npx -y github:uk-kd/operbots-mcp
 ```
 
 Подключение появится в панели: **аккаунт → Интеграции**. Оттуда же его можно отозвать,
@@ -156,6 +170,61 @@ operbots-mcp tools           перечислить доступные инст�
   в панели это делается осознанно.
 * **Значения секретных переменных бота.** Панель отдаёт их в открытом виде, сервер
   скрывает — показывается только имя переменной.
+
+---
+
+## Публикация
+
+Три ступени. Первая обязательна, остальные — про то, чтобы сервер нашли.
+
+### 1. npm — отсюда его ставят
+
+```bash
+npm adduser                       # один раз на машине
+npm version patch                 # поднимет версию, сделает коммит и метку
+git push --follow-tags
+```
+
+Метка `v*` запускает `.github/workflows/publish.yml`: сборка, проверка типов,
+сверка версии с меткой и `npm publish --provenance`. Нужен один секрет
+репозитория — `NPM_TOKEN` (npmjs.com → Access Tokens → Granular, право записи).
+
+Публикация вручную, если без действий GitHub: `npm publish --access public`.
+Ключ `--provenance` при этом не сработает — отметка о происхождении выдаётся
+только сборке в CI.
+
+Что попадает в пакет: `dist`, `README.md`, `LICENSE`, `package.json`. Исходники
+и каталог плагина остаются в репозитории — их описывает поле `files`.
+
+### 2. Плагин Claude Code — отсюда его ставят одной строкой
+
+Каталог уже лежит в репозитории:
+
+```
+.claude-plugin/marketplace.json                 каталог: перечень плагинов
+plugins/operbots-mcp/.claude-plugin/plugin.json плагин: описание и сервер MCP
+```
+
+Ничего публиковать не нужно — достаточно, чтобы репозиторий был доступен.
+Пользователь добавляет каталог по имени `владелец/репозиторий`, и Claude Code
+сам подтягивает обновления при `/plugin marketplace update`. Версию плагина
+поднимайте в `plugin.json` вместе с версией пакета.
+
+### 3. Реестр MCP — отсюда его находят
+
+[Официальный реестр](https://registry.modelcontextprotocol.io) хранит только
+описания и ссылается на npm, поэтому публикуется после первой ступени.
+`server.json` в корне уже заполнен, `mcpName` в `package.json` подтверждает
+владение пакетом.
+
+```bash
+brew install mcp-publisher        # или бинарник из релизов реестра
+mcp-publisher login github
+mcp-publisher publish
+```
+
+Версии в `server.json` (их две — сервера и пакета) должны совпадать с версией
+в `package.json`, иначе реестр отклонит публикацию.
 
 ---
 

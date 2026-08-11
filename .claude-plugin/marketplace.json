@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "operbots",
+  "description": "Панель operbots в Claude Code",
+  "owner": {
+    "name": "Nikita Belan",
+    "url": "https://github.com/uk-kd"
+  },
+  "plugins": [
+    {
+      "name": "operbots-mcp",
+      "source": "./plugins/operbots-mcp",
+      "description": "Дела, боты, сценарии на полотне, диалоги и база знаний панели operbots — от вашего имени и в рамках ваших прав"
+    }
+  ]
+}
