@@ -1,0 +1,40 @@
+{
+  "name": "operbots-mcp",
+  "version": "0.1.0",
+  "description": "MCP-сервер панели operbots: дела, боты, сценарии, диалоги и база знаний из Claude Code",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "operbots",
+    "telegram"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "operbots-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.0"
+  }
+}
