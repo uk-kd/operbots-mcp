@@ -1,7 +1,7 @@
 {
   "name": "operbots-mcp",
   "displayName": "operbots",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Панель operbots в Claude Code: дела, боты, сценарии на полотне, диалоги, база знаний и подключения к ИИ. Работает от имени вошедшего пользователя и наследует ровно его права.",
   "author": {
     "name": "Nikita Belan",
