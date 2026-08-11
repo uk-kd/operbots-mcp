@@ -165,9 +165,9 @@ git tag v0.1.2 && git push origin v0.1.2
 иначе плагин показывал бы номер прошлого выпуска. Номер в `package.json`
 править руками не нужно: источник правды — метка.
 
-Один раз заведите секрет `NPM_TOKEN` (npmjs.com → Access Tokens → Granular,
-право записи → Settings репозитория → Secrets and variables → Actions). Либо
-настройте «Trusted Publisher» на странице пакета в npm и уберите секрет вовсе.
+Секретов не нужно: право публиковать выдаётся по OIDC через «Trusted Publisher»
+на странице пакета в npm — он привязан к этому репозиторию и к файлу
+`release.yml`. Переименуете файл — поправьте привязку.
 
 Каталог плагина (`.claude-plugin/marketplace.json`, `plugins/operbots-mcp/`)
 живёт здесь же и отдельной публикации не требует.
