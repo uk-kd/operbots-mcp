@@ -140,7 +140,9 @@ export const caseTools: Tool[] = [
 
       if (!args.case) {
         if (!args.name) return 'Чтобы создать дело, нужно название.';
-        const created = await ctx.api.post<Record<string, unknown>>('/cases', payload);
+        // Архив задаётся только правкой: при создании панель такого поля не ждёт.
+        const { is_archived: _, ...fresh } = payload;
+        const created = await ctx.api.post<Record<string, unknown>>('/cases', fresh);
         ctx.forgetCases();
         return report('Дело создано.', {
           дело: `${created.emoji as string} ${created.name as string}`,

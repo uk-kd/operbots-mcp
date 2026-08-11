@@ -380,7 +380,9 @@ export const botTools: Tool[] = [
         const current = byName.get(name);
 
         if (!current) {
-          await ctx.api.post(
+          // Позицию при создании передать нельзя — панель ставит команду
+          // в конец, поэтому порядок задаём вторым запросом.
+          const created = await ctx.api.post<Command>(
             `${root}/commands`,
             body({
               command: name,
@@ -390,6 +392,9 @@ export const botTools: Tool[] = [
               node_id: wanted.node_id,
             }),
           );
+          if (created.position !== index) {
+            await ctx.api.patch(`${root}/commands/${created.id}`, { position: index });
+          }
           added.push(`/${name}`);
           continue;
         }
