@@ -20,8 +20,6 @@
   "bugs": {
     "url": "https://github.com/uk-kd/operbots-mcp/issues"
   },
-  "//": "mcpName подтверждает владение пакетом при публикации в реестре MCP.",
-  "mcpName": "io.github.uk-kd/operbots-mcp",
   "type": "module",
   "bin": {
     "operbots-mcp": "dist/index.js"
@@ -40,7 +38,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/index.js",
     "prepare": "npm run build",
-    "version": "node scripts/sync-version.mjs && git add plugins server.json"
+    "version": "node scripts/sync-version.mjs && git add plugins"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

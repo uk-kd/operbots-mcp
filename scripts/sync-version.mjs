@@ -1,11 +1,11 @@
 /**
  * Разносит версию из package.json по остальным файлам выпуска.
  *
- * Версия живёт в четырёх местах: пакет, плагин Claude Code и две записи
- * в server.json — сервера и его пакета. Реестр MCP отклоняет публикацию
- * при расхождении, а плагин молча остаётся со старым номером, поэтому
- * правка вручную рано или поздно расходится. Запускается сам из
- * `npm version` — правленые файлы попадают в тот же коммит.
+ * Номер живёт в двух местах: пакет и плагин Claude Code. Плагин молча
+ * остаётся со старым номером, если поправить только package.json, а
+ * замечают это уже пользователи — у них в списке плагинов чужая
+ * версия. Запускается сам из `npm version`, поэтому правленые файлы
+ * попадают в тот же коммит.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -24,9 +24,4 @@ const plugin = read('plugins/operbots-mcp/.claude-plugin/plugin.json');
 plugin.version = version;
 write('plugins/operbots-mcp/.claude-plugin/plugin.json', plugin);
 
-const server = read('server.json');
-server.version = version;
-for (const item of server.packages ?? []) item.version = version;
-write('server.json', server);
-
-process.stdout.write(`Версия ${version} разнесена: plugin.json, server.json\n`);
+process.stdout.write(`Версия ${version} разнесена: plugin.json\n`);

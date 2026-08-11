@@ -152,16 +152,25 @@ npm install && npm run build
 claude mcp add operbots-dev -- node ./dist/index.js
 ```
 
-Выпуск: `npm version patch && git push --follow-tags`. Метка `v*` запускает
-`.github/workflows/publish.yml` — сборка, проверка типов, сверка версии с меткой,
-`npm publish --provenance`; нужен секрет `NPM_TOKEN`. Вручную —
-`npm publish --access public`, но без отметки о происхождении.
+Выпуск — одна команда:
 
-Каталог плагина (`.claude-plugin/marketplace.json`, `plugins/operbots-mcp/`) живёт
-в этом же репозитории и отдельной публикации не требует — поднимайте версию в
-`plugin.json` вместе с пакетом. Для [реестра MCP](https://registry.modelcontextprotocol.io)
-готов `server.json`: `mcp-publisher login github && mcp-publisher publish`, версии
-в нём должны совпадать с `package.json`.
+```bash
+git tag v0.1.2 && git push origin v0.1.2
+```
+
+Метка запускает `.github/workflows/release.yml`: номер берётся из неё и
+разносится по `package.json` и плагину, проходит проверка типов и запуск
+собранного сервера, пакет уходит в npm с отметкой о происхождении, появляется
+релиз GitHub с архивом и заметками, а версия возвращается коммитом в `main` —
+иначе плагин показывал бы номер прошлого выпуска. Номер в `package.json`
+править руками не нужно: источник правды — метка.
+
+Один раз заведите секрет `NPM_TOKEN` (npmjs.com → Access Tokens → Granular,
+право записи → Settings репозитория → Secrets and variables → Actions). Либо
+настройте «Trusted Publisher» на странице пакета в npm и уберите секрет вовсе.
+
+Каталог плагина (`.claude-plugin/marketplace.json`, `plugins/operbots-mcp/`)
+живёт здесь же и отдельной публикации не требует.
 
 ---
 
