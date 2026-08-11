@@ -45,9 +45,37 @@ interface Cached<T> {
   value: T;
 }
 
+/** Поле формы, которую клиент показывает человеку. */
+export interface FormField {
+  type: 'string';
+  title: string;
+  description?: string;
+  default?: string;
+  format?: 'uri' | 'email';
+  minLength?: number;
+}
+
+export interface FormAnswer {
+  action: 'accept' | 'decline' | 'cancel';
+  content?: Record<string, unknown>;
+}
+
+/**
+ * Спрашивает что-то у человека через клиента MCP.
+ *
+ * Ответ идёт от клиента прямо серверу и в переписку с моделью не
+ * попадает — иначе пароль оказался бы в её памяти.
+ */
+export interface Prompter {
+  available(): boolean;
+  form(message: string, fields: Record<string, FormField>, required: string[]): Promise<FormAnswer>;
+}
+
 export class Context {
   private cases: Cached<CaseSummary[]> | null = null;
   private readonly bots = new Map<string, Cached<BotSummary[]>>();
+  /** Задаётся сервером после подключения клиента. */
+  prompter: Prompter | null = null;
 
   constructor(
     readonly api: OperbotsApi,

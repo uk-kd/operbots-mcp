@@ -31,7 +31,8 @@ claude mcp add operbots -- npx -y operbots-mcp
 /plugin install operbots-mcp@operbots
 ```
 
-Вход всё равно нужен один раз — `npx operbots-mcp login`.
+Дальше просто попросите Claude войти в панель — откроется окно для адреса,
+почты и пароля. Терминал не нужен вовсе.
 
 ### Пока пакет не в npm
 
@@ -50,8 +51,18 @@ claude mcp add operbots -- npx -y github:uk-kd/operbots-mcp
 
 ## Как устроен вход
 
-`operbots-mcp login` спрашивает адрес панели, почту и пароль. Пароль нигде не
-сохраняется — он сразу обменивается на токен обновления, и на диск ложится только он:
+Войти можно двумя путями, они равнозначны:
+
+* **Из Claude Code.** Инструмент `operbots_login` открывает окно с адресом
+  панели, почтой и паролем. Заполняет его человек, ответ уходит от клиента
+  прямо серверу — в переписку с моделью пароль не попадает. Работает в любом
+  клиенте MCP, который умеет запрашивать данные (elicitation); если не умеет,
+  инструмент честно скажет об этом и предложит терминал.
+* **Из терминала.** `operbots-mcp login` спрашивает то же самое, пароль
+  вводится скрыто.
+
+Пароль нигде не сохраняется — он сразу обменивается на токен обновления, и на
+диск ложится только он:
 
 ```
 ~/.operbots/credentials.json      (права 600)
@@ -86,7 +97,7 @@ claude mcp add operbots -- npx -y github:uk-kd/operbots-mcp
 | --- | --- |
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_CASE` | Дело по умолчанию: название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 18 вместо 53 |
+| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 18 вместо 55 |
 | `OPERBOTS_EMAIL`, `OPERBOTS_PASSWORD` | Вход без участия человека (контейнер, CI) |
 | `OPERBOTS_REFRESH_TOKEN` | Готовый токен вместо файла. Ротация живёт только в памяти: после перезапуска токен уже недействителен |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
@@ -106,13 +117,13 @@ claude mcp add operbots \
 
 ## Что умеет
 
-53 инструмента. Дела, ботов, сценарии и подключения можно называть по имени —
+55 инструментов. Дела, ботов, сценарии и подключения можно называть по имени —
 идентификаторы не нужны: `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
 | Раздел | Инструменты |
 | --- | --- |
 | **Справочники** | `operbots_catalog` — виды узлов и их настройки, заготовки, виды ИИ-сервисов, права |
-| **Аккаунт** | `whoami`, `sessions_list`, `sessions_revoke`, `account_update` |
+| **Аккаунт** | `operbots_login`, `operbots_logout`, `whoami`, `sessions_list`, `sessions_revoke`, `account_update` |
 | **Дела** | `cases_list`, `cases_get`, `cases_save`, `cases_delete`, `cases_leave` |
 | **Люди** | `members_list`, `members_save`, `members_remove`, `case_transfer`, `roles_save`, `roles_delete`, `invites_create`, `invites_revoke` |
 | **Боты** | `bots_list`, `bots_get`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_rotate`, `bots_delete` |
@@ -121,7 +132,7 @@ claude mcp add operbots \
 | **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
 | **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_test`, `ai_delete` |
 
-Пятнадцать инструментов помечены как необратимые — Claude Code спросит разрешение
+Шестнадцать инструментов помечены как необратимые — Claude Code спросит разрешение
 перед вызовом. Удаление дела, бота, сценария и диалога вдобавок требует передать
 название дословно: случайный вызов ничего не сотрёт.
 

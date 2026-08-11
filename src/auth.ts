@@ -18,8 +18,6 @@
  * запрещено и здесь — проверку делает бэкенд, а не этот код.
  */
 
-import { hostname } from 'node:os';
-
 import {
   API_PREFIX,
   DEFAULT_REFRESH_COOKIE,
@@ -58,7 +56,9 @@ interface TokenResponse {
 const EXPIRY_SKEW_SECONDS = 60;
 
 const LOGIN_HINT =
-  'Выполните вход: operbots-mcp login — либо задайте OPERBOTS_URL, OPERBOTS_EMAIL и OPERBOTS_PASSWORD.';
+  'Вызовите инструмент operbots_login — откроется окно входа. ' +
+  'Либо выполните в терминале operbots-mcp login, либо задайте OPERBOTS_URL, ' +
+  'OPERBOTS_EMAIL и OPERBOTS_PASSWORD.';
 
 export class AuthManager {
   private access: { token: string; expiresAt: number } | null = null;
@@ -91,12 +91,25 @@ export class AuthManager {
     return this.profile;
   }
 
+  /** Адрес панели, если он уже известен. В отличие от `baseUrl`, не бросает. */
+  async knownBaseUrl(): Promise<string | null> {
+    if (this.config.baseUrl) return this.config.baseUrl;
+    return (await this.storedProfile())?.baseUrl ?? null;
+  }
+
+  /** Выполнен ли вход: есть ли чем получить токен доступа. */
+  async signedIn(): Promise<boolean> {
+    if (this.config.accessToken || this.envRefresh) return true;
+    if (this.config.email && this.config.password) return true;
+    return (await this.storedProfile()) !== null;
+  }
+
   private url(base: string, path: string): string {
     return `${base}${API_PREFIX}${path}`;
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
-    return { 'User-Agent': `${USER_AGENT} на ${hostname()}`, ...extra };
+    return { 'User-Agent': USER_AGENT, ...extra };
   }
 
   // ── Токен доступа ──────────────────────────────────────────
@@ -289,5 +302,7 @@ export class AuthManager {
 
     this.access = null;
     this.identity = null;
+    this.profile = null;
+    this.envRefresh = null;
   }
 }

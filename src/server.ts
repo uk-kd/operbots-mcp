@@ -8,7 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { OperbotsApi } from './api.js';
 import { AuthManager } from './auth.js';
 import { PACKAGE_NAME, VERSION, loadConfig, type Config } from './config.js';
-import { Context } from './context.js';
+import { Context, type FormAnswer } from './context.js';
 import { describeError } from './errors.js';
 import { accountTools } from './tools/account.js';
 import { aiTools } from './tools/ai.js';
@@ -63,6 +63,23 @@ export function createServer(config: Config): McpServer {
         'узлами и связями. Состав настроек каждого вида узла — в operbots_catalog what=node_kinds.',
     },
   );
+
+  // Окно входа: клиент показывает форму человеку и возвращает ответ
+  // серверу напрямую, минуя переписку с моделью. Ждём долго — человек
+  // может уйти за паролем, а обычный предел запроса в минуту оборвал бы
+  // диалог прямо у него на глазах.
+  ctx.prompter = {
+    available: () => Boolean(server.server.getClientCapabilities()?.elicitation),
+    form: (message, fields, required) =>
+      server.server.elicitInput(
+        {
+          mode: 'form',
+          message,
+          requestedSchema: { type: 'object', properties: fields, required },
+        },
+        { timeout: 15 * 60 * 1000 },
+      ) as Promise<FormAnswer>,
+  };
 
   for (const item of selectTools(config)) {
     server.registerTool(

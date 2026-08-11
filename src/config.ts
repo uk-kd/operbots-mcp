@@ -5,7 +5,7 @@
  * окружения нужны для запуска без человека (CI, контейнер, сервер).
  */
 
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -15,8 +15,25 @@ const pkg = require('../package.json') as { name: string; version: string };
 export const PACKAGE_NAME = pkg.name;
 export const VERSION = pkg.version;
 
-/** Как сессия подпишется в разделе «Активные сессии» панели. */
-export const USER_AGENT = `operbots-mcp/${VERSION} (${process.platform}; node ${process.versions.node})`;
+/**
+ * Имя машины для подписи сессии — только из знаков ASCII.
+ *
+ * Заголовки HTTP передаются однобайтовой строкой, поэтому кириллица в
+ * имени компьютера (а на русской Windows оно обычное дело) обрушила бы
+ * не только вход, а вообще каждый запрос.
+ */
+function asciiHostname(): string {
+  const cleaned = hostname()
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/[;()]/g, ' ')
+    .trim();
+  return cleaned || 'unknown';
+}
+
+/** Как подключение подпишется в разделе «Интеграции» панели. */
+export const USER_AGENT =
+  `operbots-mcp/${VERSION} ` +
+  `(${process.platform}; node ${process.versions.node}; ${asciiHostname()})`;
 
 /** Префикс API панели — совпадает с `api_prefix` в настройках operbots. */
 export const API_PREFIX = '/api/v1';
@@ -56,11 +73,23 @@ function flag(name: string): boolean {
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
 }
 
-/** Приводит адрес панели к виду `https://host[:port]` без хвостового слэша. */
+/** Локальные адреса, куда панель обычно смотрит без шифрования. */
+const LOCAL = /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\]|::1)(:|$)/i;
+
+/**
+ * Приводит адрес панели к виду `схема://host[:port]` без хвостового слэша.
+ *
+ * Схему угадываем: `localhost:8080` без неё почти всегда означает свою
+ * машину без сертификата, а `panel.example.com` — боевую панель за
+ * шифрованием. Иначе человек, набравший привычное `localhost:8080`,
+ * упирался бы в невразумительный отказ рукопожатия.
+ */
 export function normalizeBaseUrl(raw: string): string {
   let value = raw.trim();
   if (!value) throw new Error('Адрес панели не может быть пустым');
-  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  if (!/^https?:\/\//i.test(value)) {
+    value = `${LOCAL.test(value) ? 'http' : 'https'}://${value}`;
+  }
 
   let parsed: URL;
   try {
