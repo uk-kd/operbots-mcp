@@ -4,8 +4,21 @@
 
 import { z } from 'zod';
 
-import { report } from '../format.js';
-import { caseField, body, optional, tool, type Tool } from './kit.js';
+import type { Page } from '../api.js';
+import { pageFooter, report } from '../format.js';
+import { caseField, body, limitField, optional, tool, type Tool } from './kit.js';
+
+/** Запись журнала действий дела. */
+interface AuditEvent {
+  action: string;
+  title: string;
+  summary: string;
+  created_at: string;
+  actor: { display_name: string; email: string } | null;
+  via_token: boolean;
+  token_name: string | null;
+  ip_address: string | null;
+}
 
 interface Overview {
   bots_total: number;
@@ -189,6 +202,45 @@ export const caseTools: Tool[] = [
       await ctx.api.delete(`/cases/${found.id}`);
       ctx.forgetCases();
       return `Дело «${found.name}» удалено вместе со всем содержимым.`;
+    },
+  }),
+
+  tool({
+    name: 'audit_list',
+    title: 'Журнал действий',
+    kind: 'read',
+    description:
+      'Кто и что менял в деле: правки, включения, удаления, выдачу прав. Отвечает на вопрос ' +
+      '«кто это сделал» — в том числе про действия, совершённые токеном доступа: у таких ' +
+      'записей указано, каким именно. Чтение в журнал не попадает. Требует права audit.view.',
+    input: {
+      case: caseField,
+      action: z
+        .string()
+        .optional()
+        .describe(
+          'Вид события, например flow.update, bot.delete, role.update. Без него — все виды.',
+        ),
+      limit: limitField(200, 50),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const page = await ctx.api.get<Page<AuditEvent>>(`/cases/${found.id}/audit`, {
+        limit: args.limit,
+        action: args.action,
+      });
+
+      return report(
+        `Журнал дела «${found.name}» — ${pageFooter(page)}`,
+        page.items.map((item) => ({
+          когда: item.created_at,
+          что: item.summary,
+          вид: item.action,
+          кто: item.actor ? item.actor.display_name : 'учётная запись удалена',
+          токеном: item.via_token ? item.token_name || 'без названия' : undefined,
+          адрес: item.ip_address ?? undefined,
+        })),
+      );
     },
   }),
 

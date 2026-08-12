@@ -56,12 +56,24 @@ interface Flow {
 interface FlowBrief {
   id: string;
   name: string;
+  bot_name: string;
   description: string | null;
   is_active: boolean;
   version: number;
   nodes_count: number;
   edges_count: number;
+  problems_count: number;
   updated_at: string;
+}
+
+/** Файл выгрузки сценария: то, что панель скачивает и читает обратно. */
+interface FlowDocument {
+  format: string;
+  version: number;
+  name: string;
+  description: string | null;
+  graph: RawGraph;
+  source?: { case: string | null; bot: string | null; flow_version: number | null };
 }
 
 interface Version {
@@ -203,11 +215,39 @@ async function locate(
 export const flowTools: Tool[] = [
   tool({
     name: 'flows_list',
-    title: 'Сценарии бота',
+    title: 'Сценарии',
     kind: 'read',
-    description: 'Какие сценарии заведены у бота, какой из них в работе и сколько в них узлов.',
-    input: { case: caseField, bot: botField },
+    description:
+      'Какие сценарии заведены, какой из них в работе и сколько в них узлов. ' +
+      'Без параметра bot возвращает сценарии всего дела — со всех ботов сразу.',
+    input: {
+      case: caseField,
+      bot: botField.optional().describe(
+        'Бот: название, @username или идентификатор. Без него — все боты дела.',
+      ),
+    },
     async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+
+      if (!args.bot) {
+        const list = await ctx.api.get<FlowBrief[]>(`/cases/${found.id}/flows`);
+        const working = list.filter((item) => item.is_active).length;
+        return report(
+          `Сценариев в деле «${found.name}»: ${list.length}, в работе ${working}`,
+          list.map((item) => ({
+            сценарий: item.name,
+            бот: item.bot_name,
+            идентификатор: item.id,
+            в_работе: item.is_active,
+            редакция: item.version,
+            узлов: item.nodes_count,
+            связей: item.edges_count,
+            замечаний: item.problems_count || undefined,
+            изменён: item.updated_at,
+          })),
+        );
+      }
+
       const { bot, root } = await locate(ctx, args.case, args.bot);
       const list = await ctx.api.get<FlowBrief[]>(root);
 
@@ -440,6 +480,65 @@ export const flowTools: Tool[] = [
         бот_ответил_бы: result.messages,
         переменные: result.variables,
       });
+    },
+  }),
+
+  tool({
+    name: 'flows_export',
+    title: 'Выгрузить сценарий',
+    kind: 'read',
+    description:
+      'Отдаёт сценарий одним объектом формата operbots.flow — тем же, что панель скачивает ' +
+      'кнопкой «Скачать». Годится, чтобы сохранить копию рядом с кодом или перенести схему ' +
+      'в другое дело через flows_import.',
+    input: {
+      case: caseField,
+      bot: botField,
+      flow: z.string().describe('Сценарий: название или идентификатор.'),
+    },
+    async run(args, ctx) {
+      const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
+      const document = await ctx.api.get<FlowDocument>(`${root}/${flowId}/export`);
+      return report(`Выгрузка сценария «${document.name}»`, document);
+    },
+  }),
+
+  tool({
+    name: 'flows_import',
+    title: 'Загрузить сценарий из выгрузки',
+    kind: 'write',
+    description:
+      'Заводит сценарий из объекта, полученного через flows_export. Существующие не трогает: ' +
+      'загруженный добавляется рядом, а при совпадении названий получает номер. ' +
+      'Ссылки на ИИ-сервис и базу знаний исходного дела при переезде проверяются, ' +
+      'и неразрешимые снимаются — о каждой снятой сказано в ответе.',
+    input: {
+      case: caseField,
+      bot: botField,
+      document: z
+        .record(z.string(), z.unknown())
+        .describe('Содержимое выгрузки целиком — то, что вернул flows_export.'),
+      name: z
+        .string()
+        .min(1)
+        .max(120)
+        .optional()
+        .describe('Своё название вместо записанного в выгрузке.'),
+    },
+    async run(args, ctx) {
+      const { bot, root } = await locate(ctx, args.case, args.bot);
+      const result = await ctx.api.post<{ flow: Flow; warnings: string[] }>(`${root}/import`, {
+        document: args.document,
+        name: args.name ?? null,
+      });
+
+      return report(
+        `Сценарий «${result.flow.name}» загружен боту «${bot.name}»`,
+        {
+          ...showFlow(result.flow, false),
+          снятые_ссылки: result.warnings.length > 0 ? result.warnings : undefined,
+        },
+      );
     },
   }),
 

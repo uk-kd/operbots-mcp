@@ -47,8 +47,17 @@ interface Journey {
   flow_name: string;
   stage: { node_id: string; title: string; kind: string } | null;
   awaiting: string | null;
+  /** Куда разговор пойдёт, если ответить прямо сейчас. */
+  next_steps: { node_id: string; title: string; kind: string }[];
   trail: { node_id: string; title: string; kind: string }[];
-  scheduled: { node_id: string; title: string; run_at: string; cancel_on_reply: boolean }[];
+  scheduled: {
+    id: string;
+    node_id: string;
+    title: string;
+    run_at: string;
+    cancel_on_reply: boolean;
+    seconds_left: number;
+  }[];
   variables: Record<string, unknown>;
 }
 
@@ -199,12 +208,21 @@ export const dialogTools: Tool[] = [
                   ? `${journey.stage.title || journey.stage.node_id} (${journey.stage.kind})`
                   : 'нигде не ждёт',
                 ждёт_ответа_в: journey.awaiting,
+                // Что будет дальше, важнее пройденного: по нему решают,
+                // вмешиваться или дать боту доработать.
+                дальше_по_сценарию:
+                  journey.next_steps?.length > 0
+                    ? journey.next_steps.map(
+                        (step) => `${step.title || step.node_id} (${step.kind})`,
+                      )
+                    : undefined,
                 пройдено: journey.trail.map(
                   (step) => `${step.title || step.node_id} (${step.kind})`,
                 ),
                 запланировано: journey.scheduled.map(
                   (step) =>
-                    `${step.title || step.node_id} — ${step.run_at}` +
+                    `${step.title || step.node_id} — через ${Math.max(0, Math.round(step.seconds_left / 60))} мин ` +
+                    `(${step.run_at})` +
                     (step.cancel_on_reply ? ', отменится при ответе' : ''),
                 ),
               },
@@ -427,6 +445,30 @@ export const dialogTools: Tool[] = [
         `/cases/${found.id}/tasks/${args.task_id}`,
       );
       return result.message ?? (result.ok ? 'Действие отменено.' : 'Действие не найдено.');
+    },
+  }),
+
+  tool({
+    name: 'dialogs_reset_stage',
+    title: 'Снять разговор с шага',
+    kind: 'write',
+    description:
+      'Освобождает разговор, застрявший на узле ожидания: сценарий ждёт ответа, которого не ' +
+      'будет, и со стороны это выглядит молчащим ботом. После снятия следующее сообщение ' +
+      'начнёт сценарий заново. Отложенные продолжения этого разговора снимаются заодно — ' +
+      'они назначены от того же шага и сработали бы в пустоту.',
+    input: {
+      case: caseField,
+      dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      await ctx.api.post(`/cases/${found.id}/dialogs/${dialog.id}/reset-stage`);
+      return (
+        `Разговор с «${dialog.contact_name}» снят с шага. ` +
+        'Следующее сообщение начнёт сценарий заново.'
+      );
     },
   }),
 ];
