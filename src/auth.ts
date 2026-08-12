@@ -1,40 +1,28 @@
 /**
- * Вход в панель и поддержание доступа.
+ * Доступ к панели по токену.
  *
- * Как это устроено. Панель выдаёт короткоживущий токен доступа (по
- * умолчанию 30 минут) и токен обновления на 30 дней. Обновление —
- * с ротацией: в ответ приходит новый токен обновления, а прежний
- * гасится в ту же секунду. Отсюда два следствия, которые определяют
- * весь код ниже:
+ * Токен выпускается в панели: аккаунт → Интеграции → «Выпустить токен».
+ * Он не истекает сам по себе и не требует обновления, поэтому здесь нет
+ * ни ротации, ни гонки между двумя сессиями Claude Code за общий файл —
+ * всё это ушло вместе с входом по паролю. Пароль сервер теперь не видит
+ * вовсе и хранить его негде.
  *
- * 1. Новый токен нужно записать на диск раньше, чем он понадобится
- *    снова, иначе перезапуск сервера потеряет доступ.
- * 2. Два процесса не должны обновляться одновременно: второй придёт
- *    с уже погашенным токеном. Поэтому обновление идёт под общей
- *    блокировкой файла, а токен перечитывается прямо перед запросом.
- *
- * Сервер не получает никаких особенных прав: он работает обычной
- * пользовательской сессией. Всё, что запрещено роли в панели, будет
- * запрещено и здесь — проверку делает бэкенд, а не этот код.
+ * Прав токен не добавляет: он опознаёт того же пользователя, и панель
+ * применяет к запросам ровно его роли. Отзывают токен там же, где
+ * выпускали.
  */
 
-import {
-  API_PREFIX,
-  DEFAULT_REFRESH_COOKIE,
-  USER_AGENT,
-  type Config,
-} from './config.js';
+import { API_PREFIX, USER_AGENT, type Config } from './config.js';
 import {
   loadProfile,
   saveProfile,
-  updateRefreshToken,
   withCredentialsLock,
   type StoredProfile,
 } from './credentials.js';
-import { ApiError, AuthRequiredError, ConfigError } from './errors.js';
-import { parse, readCookie, send } from './http.js';
+import { AuthRequiredError } from './errors.js';
+import { parse, send } from './http.js';
 
-/** Пользователь панели — то, что приходит в ответе входа. */
+/** Пользователь панели — то, что отдаёт `/users/me`. */
 export interface Identity {
   id: string;
   email: string;
@@ -46,36 +34,30 @@ export interface Identity {
   last_case_id: string | null;
 }
 
-interface TokenResponse {
-  access_token: string;
-  expires_in: number;
-  user: Identity;
-}
-
-/** За сколько секунд до истечения считаем токен доступа непригодным. */
-const EXPIRY_SKEW_SECONDS = 60;
+/** Приставка, по которой токен доступа отличается от прочих строк. */
+export const TOKEN_PREFIX = 'opb_';
 
 const LOGIN_HINT =
-  'Вызовите инструмент operbots_login — откроется окно входа. ' +
-  'Либо выполните в терминале operbots-mcp login, либо задайте OPERBOTS_URL, ' +
-  'OPERBOTS_EMAIL и OPERBOTS_PASSWORD.';
+  'Вызовите инструмент operbots_login — откроется окно для адреса панели и токена. ' +
+  'Токен выпускается в панели: аккаунт → Интеграции. ' +
+  'Либо выполните в терминале operbots-mcp login, либо задайте OPERBOTS_URL и OPERBOTS_TOKEN.';
 
 export class AuthManager {
-  private access: { token: string; expiresAt: number } | null = null;
-  private pending: Promise<string> | null = null;
   private identity: Identity | null = null;
   private profile: StoredProfile | null = null;
-  /** Токен обновления из окружения: живёт только в памяти процесса. */
-  private envRefresh: string | null;
+  private loaded = false;
 
-  constructor(private readonly config: Config) {
-    this.envRefresh = config.refreshToken;
-    if (config.accessToken) {
-      this.access = { token: config.accessToken, expiresAt: Number.POSITIVE_INFINITY };
+  constructor(private readonly config: Config) {}
+
+  // ── Что известно о доступе ─────────────────────────────────
+
+  private async storedProfile(): Promise<StoredProfile | null> {
+    if (!this.loaded) {
+      this.profile = await loadProfile(this.config.credentialsPath, this.config.baseUrl);
+      this.loaded = true;
     }
+    return this.profile;
   }
-
-  // ── Адрес панели ───────────────────────────────────────────
 
   /** Адрес панели: из окружения, иначе из сохранённого профиля. */
   async baseUrl(): Promise<string> {
@@ -85,224 +67,96 @@ export class AuthManager {
     throw new AuthRequiredError(`Панель не выбрана. ${LOGIN_HINT}`);
   }
 
-  private async storedProfile(): Promise<StoredProfile | null> {
-    if (this.profile) return this.profile;
-    this.profile = await loadProfile(this.config.credentialsPath, this.config.baseUrl);
-    return this.profile;
-  }
-
-  /** Адрес панели, если он уже известен. В отличие от `baseUrl`, не бросает. */
+  /** Адрес панели, если он известен. В отличие от `baseUrl`, не бросает. */
   async knownBaseUrl(): Promise<string | null> {
     if (this.config.baseUrl) return this.config.baseUrl;
     return (await this.storedProfile())?.baseUrl ?? null;
   }
 
-  /** Выполнен ли вход: есть ли чем получить токен доступа. */
+  /** Токен доступа: из окружения или из сохранённого профиля. */
+  async token(): Promise<string> {
+    if (this.config.token) return this.config.token;
+
+    const profile = await this.storedProfile();
+    if (profile?.token) return profile.token;
+
+    // Файл от прежних выпусков хранил токен обновления сессии. Его
+    // больше не принимают, и молчать об этом нельзя: человек увидел бы
+    // отказ без всякого объяснения.
+    if (profile?.refreshToken) {
+      throw new AuthRequiredError(
+        'Сохранённый доступ остался от входа по паролю, который больше не поддерживается. ' +
+          `Выпустите токен в панели и войдите заново. ${LOGIN_HINT}`,
+      );
+    }
+
+    throw new AuthRequiredError(`Доступ к панели не сохранён. ${LOGIN_HINT}`);
+  }
+
+  /** Выполнен ли вход. */
   async signedIn(): Promise<boolean> {
-    if (this.config.accessToken || this.envRefresh) return true;
-    if (this.config.email && this.config.password) return true;
-    return (await this.storedProfile()) !== null;
+    if (this.config.token) return true;
+    return Boolean((await this.storedProfile())?.token);
   }
 
-  private url(base: string, path: string): string {
-    return `${base}${API_PREFIX}${path}`;
-  }
+  // ── Кто вошёл ──────────────────────────────────────────────
 
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
-    return { 'User-Agent': USER_AGENT, ...extra };
-  }
-
-  // ── Токен доступа ──────────────────────────────────────────
-
-  /** Действующий токен доступа; при необходимости обновляет его. */
-  async accessToken(): Promise<string> {
-    if (this.access && Date.now() < this.access.expiresAt) return this.access.token;
-    if (this.config.accessToken) return this.config.accessToken;
-
-    // Одно обновление на процесс: параллельные вызовы ждут общий запрос,
-    // иначе ротация погасит токен, который второй запрос ещё не получил.
-    this.pending ??= this.renew().finally(() => {
-      this.pending = null;
-    });
-    return this.pending;
-  }
-
-  /** Сбрасывает токен доступа: следующий вызов возьмёт свежий. */
-  invalidate(): void {
-    if (!this.config.accessToken) this.access = null;
-  }
-
-  /** Кто вошёл. Берётся из ответа входа, иначе спрашивается у панели. */
+  /** Владелец токена. Ответ запоминается на время работы процесса. */
   async whoami(): Promise<Identity> {
     if (this.identity) return this.identity;
-
-    const base = await this.baseUrl();
-    const token = await this.accessToken();
-    if (this.identity) return this.identity;
-
-    const response = await send(this.url(base, '/users/me'), {
-      headers: this.headers({ Authorization: `Bearer ${token}` }),
-      timeoutMs: this.config.timeoutMs,
-    });
-    this.identity = await parse<Identity>(response);
+    this.identity = await this.fetchIdentity(await this.baseUrl(), await this.token());
     return this.identity;
   }
 
-  // ── Обновление ─────────────────────────────────────────────
-
-  private async renew(): Promise<string> {
-    const base = await this.baseUrl();
-
-    // Режим окружения: файла нет, ротация живёт только в памяти.
-    if (this.envRefresh) {
-      try {
-        return await this.exchange(base, this.envRefresh, DEFAULT_REFRESH_COOKIE, (token) => {
-          this.envRefresh = token;
-        });
-      } catch (error) {
-        if (error instanceof ApiError && error.isUnauthenticated) return this.loginFromEnv(base);
-        throw error;
-      }
-    }
-
-    if (this.config.email && this.config.password && !(await this.storedProfile())) {
-      return this.loginFromEnv(base);
-    }
-
-    return withCredentialsLock(this.config.credentialsPath, async () => {
-      // Перечитываем прямо под блокировкой: соседний процесс мог только
-      // что провести ротацию, и наш токен в памяти уже погашен.
-      const stored = await loadProfile(this.config.credentialsPath, this.config.baseUrl);
-      if (!stored) throw new AuthRequiredError(`Доступ к панели не сохранён. ${LOGIN_HINT}`);
-      this.profile = stored;
-
-      try {
-        return await this.exchange(stored.baseUrl, stored.refreshToken, stored.cookieName, (token) =>
-          updateRefreshToken(this.config.credentialsPath, stored.baseUrl, token),
-        );
-      } catch (error) {
-        if (!(error instanceof ApiError) || !error.isUnauthenticated) throw error;
-        if (this.config.email && this.config.password) return this.loginFromEnv(stored.baseUrl);
-        throw new AuthRequiredError(
-          `Сессия панели больше не действует (${error.message}). ` +
-            'Возможно, её отозвали в разделе «Активные сессии» или прошло больше 30 дней. ' +
-            'Войдите заново: operbots-mcp login',
-        );
-      }
-    });
-  }
-
-  /**
-   * Меняет токен обновления на новую пару и сохраняет результат.
-   *
-   * Сохранение происходит до возврата токена доступа: если запись
-   * упадёт, лучше сообщить об этом сразу, чем потерять доступ при
-   * следующем запуске.
-   */
-  private async exchange(
-    base: string,
-    refreshToken: string,
-    cookieName: string,
-    persist: (token: string) => void | Promise<void>,
-  ): Promise<string> {
-    const response = await send(this.url(base, '/auth/refresh'), {
-      method: 'POST',
-      headers: this.headers({ Cookie: `${cookieName}=${refreshToken}` }),
+  private async fetchIdentity(base: string, token: string): Promise<Identity> {
+    const response = await send(`${base}${API_PREFIX}/users/me`, {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': USER_AGENT },
       timeoutMs: this.config.timeoutMs,
     });
-
-    const payload = await parse<TokenResponse>(response);
-    const rotated = readCookie(response, cookieName);
-    if (rotated) await persist(rotated.value);
-
-    return this.remember(payload, base, rotated?.name ?? cookieName);
+    return parse<Identity>(response);
   }
 
-  private remember(payload: TokenResponse, base: string, cookieName: string): string {
-    this.identity = payload.user;
-    this.access = {
-      token: payload.access_token,
-      expiresAt: Date.now() + Math.max(payload.expires_in - EXPIRY_SKEW_SECONDS, 5) * 1000,
-    };
-    if (this.profile) this.profile = { ...this.profile, baseUrl: base, cookieName };
-    return payload.access_token;
-  }
-
-  // ── Вход ───────────────────────────────────────────────────
-
-  private async loginFromEnv(base: string): Promise<string> {
-    if (!this.config.email || !this.config.password) {
-      throw new AuthRequiredError(`Доступ к панели не сохранён. ${LOGIN_HINT}`);
-    }
-    const result = await this.authenticate(base, this.config.email, this.config.password);
-
-    // Пароль в окружении означает, что вход можно повторить в любой
-    // момент, поэтому файл не трогаем — процесс самодостаточен.
-    this.envRefresh = result.refreshToken;
-    return this.remember(result.payload, base, result.cookieName);
-  }
+  // ── Вход и выход ───────────────────────────────────────────
 
   /**
-   * Вход по почте и паролю. Пароль никуда не сохраняется: он сразу
-   * обменивается на токен обновления.
+   * Проверяет токен живым запросом и сохраняет его.
+   *
+   * Проверка обязательна: сохранить непроверенный токен значит отложить
+   * отказ до первого настоящего действия, когда объяснить его будет уже
+   * нечем.
    */
-  async signIn(base: string, email: string, password: string): Promise<Identity> {
-    const result = await this.authenticate(base, email, password);
+  async signIn(base: string, token: string): Promise<Identity> {
+    const value = token.trim();
+    if (!value) throw new AuthRequiredError('Токен пустой.');
+    if (!value.startsWith(TOKEN_PREFIX)) {
+      throw new AuthRequiredError(
+        `Это не похоже на токен панели — он начинается с «${TOKEN_PREFIX}». ` +
+          'Выпустите токен в панели: аккаунт → Интеграции.',
+      );
+    }
+
+    const user = await this.fetchIdentity(base, value);
 
     await withCredentialsLock(this.config.credentialsPath, () =>
       saveProfile(this.config.credentialsPath, {
         baseUrl: base,
-        refreshToken: result.refreshToken,
-        cookieName: result.cookieName,
-        email: result.payload.user.email,
-        userId: result.payload.user.id,
-        displayName: result.payload.user.display_name,
+        token: value,
+        email: user.email,
+        userId: user.id,
+        displayName: user.display_name,
       }),
     );
 
     this.profile = await loadProfile(this.config.credentialsPath, base);
-    this.remember(result.payload, base, result.cookieName);
-    return result.payload.user;
+    this.loaded = true;
+    this.identity = user;
+    return user;
   }
 
-  private async authenticate(
-    base: string,
-    email: string,
-    password: string,
-  ): Promise<{ payload: TokenResponse; refreshToken: string; cookieName: string }> {
-    const response = await send(this.url(base, '/auth/login'), {
-      method: 'POST',
-      headers: this.headers(),
-      body: { email, password },
-      timeoutMs: this.config.timeoutMs,
-    });
-
-    const payload = await parse<TokenResponse>(response);
-    const cookie = readCookie(response, DEFAULT_REFRESH_COOKIE);
-    if (!cookie) {
-      throw new ConfigError(
-        'Панель не вернула токен обновления. Так бывает, если запрос прошёл через прокси, ' +
-          'вырезающий заголовок Set-Cookie: проверьте настройки обратного прокси.',
-      );
-    }
-
-    return { payload, refreshToken: cookie.value, cookieName: cookie.name };
-  }
-
-  /** Завершает сессию в панели. Ошибку сети не считаем помехой выходу. */
-  async signOut(): Promise<void> {
-    const profile = await this.storedProfile();
-    if (!profile) return;
-
-    await send(this.url(profile.baseUrl, '/auth/logout'), {
-      method: 'POST',
-      headers: this.headers({ Cookie: `${profile.cookieName}=${profile.refreshToken}` }),
-      timeoutMs: this.config.timeoutMs,
-    }).catch(() => undefined);
-
-    this.access = null;
+  /** Забывает доступ на этой машине. Сам токен остаётся действующим. */
+  forget(): void {
     this.identity = null;
     this.profile = null;
-    this.envRefresh = null;
+    this.loaded = false;
   }
 }

@@ -17,8 +17,6 @@ export type Query = Record<string, string | number | boolean | undefined | null>
 interface CallOptions {
   query?: Query;
   body?: unknown;
-  /** Разрешить повтор после обновления токена. Внутренний флаг. */
-  retry?: boolean;
 }
 
 /** Страница списка: панель отвечает так на все перечисления. */
@@ -57,7 +55,7 @@ export class OperbotsApi {
 
   private async call<T>(method: string, path: string, options: CallOptions = {}): Promise<T> {
     const base = await this.auth.baseUrl();
-    const token = await this.auth.accessToken();
+    const token = await this.auth.token();
     const url = `${base}${API_PREFIX}${path}${buildQuery(options.query)}`;
 
     const response = await send(url, {
@@ -73,12 +71,6 @@ export class OperbotsApi {
     try {
       return await parse<T>(response);
     } catch (error) {
-      // Токен мог истечь между проверкой срока и запросом — один повтор
-      // со свежим токеном дешевле, чем ошибка в диалоге.
-      if (error instanceof ApiError && error.isUnauthenticated && options.retry !== false) {
-        this.auth.invalidate();
-        return this.call<T>(method, path, { ...options, retry: false });
-      }
       throw enrich(error);
     }
   }
@@ -87,6 +79,23 @@ export class OperbotsApi {
 /** Дополняет частые ошибки подсказкой, что делать дальше. */
 function enrich(error: unknown): unknown {
   if (!(error instanceof ApiError)) return error;
+  if (error.isUnauthenticated) {
+    return new ApiError(
+      error.status,
+      error.code,
+      `${error.message}\nВыпустите новый токен в панели (аккаунт → Интеграции) и вызовите operbots_login.`,
+      error.details,
+    );
+  }
+  if (error.code === 'session_required') {
+    return new ApiError(
+      error.status,
+      error.code,
+      'Токенами доступа управляют только из панели: выпустить или отозвать токен ' +
+        'по самому токену нельзя — иначе утёкший ключ выписывал бы себе новые.',
+      error.details,
+    );
+  }
   if (error.code === 'profile_incomplete') {
     return new ApiError(
       error.status,

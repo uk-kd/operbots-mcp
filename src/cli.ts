@@ -1,13 +1,14 @@
 /**
  * Команды в терминале: вход, выход и проверка подключения.
  *
- * Вход спрашивает пароль один раз и никуда его не сохраняет: пароль
- * сразу обменивается на токен обновления, и на диск ложится только он.
+ * Вход спрашивает адрес панели и токен доступа. Пароль здесь не нужен и
+ * не принимается: токен выпускается в самой панели, где человек уже
+ * вошёл, и там же отзывается.
  */
 
 import { createInterface } from 'node:readline/promises';
 
-import { AuthManager } from './auth.js';
+import { AuthManager, TOKEN_PREFIX } from './auth.js';
 import { OperbotsApi } from './api.js';
 import { PACKAGE_NAME, VERSION, loadConfig, normalizeBaseUrl } from './config.js';
 import { listProfiles, removeProfile, withCredentialsLock } from './credentials.js';
@@ -16,7 +17,7 @@ import { selectTools } from './server.js';
 
 const out = (text = '') => process.stdout.write(`${text}\n`);
 
-/** Прерывание с клавиатуры и забой — в сыром режиме они приходят как обычные символы. */
+/** Прерывание с клавиатуры и забой — в сыром режиме это обычные символы. */
 const CTRL_C = String.fromCharCode(3);
 const DELETE = String.fromCharCode(127);
 
@@ -33,7 +34,7 @@ async function ask(question: string, fallback?: string): Promise<string> {
   }
 }
 
-/** Читает пароль, не показывая его в терминале. */
+/** Читает секрет, не показывая его в терминале. */
 async function askSecret(question: string): Promise<string> {
   const stdin = process.stdin;
   if (!stdin.isTTY) return ask(question);
@@ -62,7 +63,7 @@ async function askSecret(question: string): Promise<string> {
           value = value.slice(0, -1);
           continue;
         }
-        // Управляющие последовательности (стрелки и прочее) в пароль не берём.
+        // Управляющие последовательности в значение не берём.
         if (char >= ' ') value += char;
       }
     };
@@ -87,22 +88,23 @@ export async function login(argv: string[]): Promise<number> {
     return 1;
   }
 
-  const email = flags.email ?? config.email ?? (await ask('Почта'));
-  if (!email) {
-    out('Без почты войти нельзя.');
+  if (!flags.token && !config.token) {
+    out();
+    out(`Токен выпускается в панели: ${base}/dashboard/account → Интеграции → «Выпустить токен».`);
+    out('Значение показывается один раз — скопируйте его сразу.');
+    out();
+  }
+
+  const token = flags.token ?? config.token ?? (await askSecret('Токен'));
+  if (!token) {
+    out('Без токена войти нельзя.');
     return 1;
   }
 
-  const password = config.password ?? (await askSecret('Пароль'));
-  if (!password) {
-    out('Без пароля войти нельзя.');
-    return 1;
-  }
-
-  const auth = new AuthManager({ ...config, baseUrl: base });
+  const auth = new AuthManager({ ...config, baseUrl: base, token: null });
   try {
-    const user = await auth.signIn(base, email, password);
-    const api = new OperbotsApi(auth, { ...config, baseUrl: base });
+    const user = await auth.signIn(base, token);
+    const api = new OperbotsApi(auth, { ...config, baseUrl: base, token: null });
     const cases = await api
       .get<{ name: string; emoji: string }[]>('/cases')
       .catch(() => [] as { name: string; emoji: string }[]);
@@ -110,15 +112,18 @@ export async function login(argv: string[]): Promise<number> {
     out();
     out(`Вход выполнен: ${user.display_name} <${user.email}>`);
     out(`Панель: ${base}`);
-    out(`Доступно дел: ${cases.length}${cases.length ? ` — ${cases.map((item) => `${item.emoji} ${item.name}`).join(', ')}` : ''}`);
+    out(
+      `Доступно дел: ${cases.length}` +
+        (cases.length ? ` — ${cases.map((item) => `${item.emoji} ${item.name}`).join(', ')}` : ''),
+    );
     if (!user.profile_completed) {
       out();
       out('Внимание: профиль не заполнен — откройте панель и пройдите шаг знакомства,');
       out('иначе API закрыт целиком.');
     }
     out();
-    out(`Доступ сохранён в ${config.credentialsPath}`);
-    out('Подключение видно в панели: аккаунт → Активные сессии. Оттуда же его можно отозвать.');
+    out(`Токен сохранён в ${config.credentialsPath}`);
+    out('Отозвать его можно в панели: аккаунт → Интеграции.');
     out();
     out('Подключить к Claude Code:');
     out(`  claude mcp add operbots -- npx -y ${PACKAGE_NAME}`);
@@ -137,18 +142,27 @@ export async function logout(argv: string[]): Promise<number> {
 
   let base: string;
   try {
-    base = flags.url ? normalizeBaseUrl(flags.url) : await auth.baseUrl();
+    base = flags.url ? normalizeBaseUrl(flags.url) : ((await auth.knownBaseUrl()) ?? '');
   } catch (error) {
     out(describeError(error));
     return 1;
   }
+  if (!base) {
+    out('Сохранённого доступа нет — выходить не из чего.');
+    return 0;
+  }
 
-  await auth.signOut();
   const removed = await withCredentialsLock(config.credentialsPath, () =>
     removeProfile(config.credentialsPath, base),
   );
+  auth.forget();
 
-  out(removed ? `Доступ к ${base} удалён, сессия в панели завершена.` : `Сохранённого доступа к ${base} не было.`);
+  out(
+    removed
+      ? `Токен для ${base} удалён с этой машины.`
+      : `Сохранённого доступа к ${base} не было.`,
+  );
+  out('Сам токен продолжает действовать — отзовите его в панели: аккаунт → Интеграции.');
   return 0;
 }
 
@@ -160,26 +174,27 @@ export async function status(): Promise<number> {
   out(`Файл доступа: ${config.credentialsPath}`);
   out();
 
-  if (profiles.length === 0 && !config.refreshToken && !(config.email && config.password)) {
+  if (profiles.length === 0 && !config.token) {
     out('Вход не выполнен. Выполните: operbots-mcp login');
     return 1;
   }
 
   for (const profile of profiles) {
     const mark = profile.baseUrl === current ? '→' : ' ';
-    out(`${mark} ${profile.baseUrl} — ${profile.displayName ?? profile.email ?? 'неизвестно кто'} (обновлён ${profile.updatedAt})`);
+    const who = profile.displayName ?? profile.email ?? 'неизвестно кто';
+    const kind = profile.token ? 'токен' : 'устаревший доступ по паролю';
+    out(`${mark} ${profile.baseUrl} — ${who} (${kind}, обновлён ${profile.updatedAt})`);
   }
-  if (config.refreshToken) out('  доступ задан переменной OPERBOTS_REFRESH_TOKEN');
-  if (config.email && config.password) out('  вход по OPERBOTS_EMAIL и OPERBOTS_PASSWORD');
+  if (config.token) out('  токен задан переменной OPERBOTS_TOKEN');
   out();
 
   const auth = new AuthManager(config);
   const api = new OperbotsApi(auth, config);
   try {
     const user = await auth.whoami();
-    const cases = await api.get<{ name: string; emoji: string; permissions: string[]; role_name: string | null; is_owner: boolean }[]>(
-      '/cases',
-    );
+    const cases = await api.get<
+      { name: string; emoji: string; permissions: string[]; role_name: string | null; is_owner: boolean }[]
+    >('/cases');
 
     out(`Связь с панелью есть: ${user.display_name} <${user.email}>`);
     for (const item of cases) {
@@ -220,25 +235,25 @@ export function help(): number {
 
 Использование:
   operbots-mcp                 запустить сервер MCP (так его вызывает Claude Code)
-  operbots-mcp login           войти в панель и сохранить доступ
-  operbots-mcp logout          завершить сессию и удалить сохранённый доступ
+  operbots-mcp login           сохранить токен доступа к панели
+  operbots-mcp logout          удалить токен с этой машины
   operbots-mcp status          проверить связь с панелью и показать права
   operbots-mcp tools           перечислить доступные инструменты
 
 Ключи команды login:
   --url <адрес>                адрес панели, например https://panel.example.com
-  --email <почта>              почта учётной записи
+  --token <${TOKEN_PREFIX}…>            токен, если не хочется вводить его отдельно
 
 Переменные окружения:
   OPERBOTS_URL                 адрес панели
-  OPERBOTS_EMAIL               почта для входа без вопросов
-  OPERBOTS_PASSWORD            пароль для входа без вопросов
-  OPERBOTS_REFRESH_TOKEN       готовый токен обновления вместо файла
+  OPERBOTS_TOKEN               токен доступа вместо сохранённого файла
   OPERBOTS_CASE                дело по умолчанию: название или идентификатор
   OPERBOTS_READ_ONLY=1         оставить только инструменты чтения
   OPERBOTS_CREDENTIALS         путь к файлу с сохранённым доступом
   OPERBOTS_TIMEOUT_MS          сколько ждать ответ панели, по умолчанию 30000
   OPERBOTS_INSECURE_TLS=1      не проверять сертификат панели
+
+Токен выпускается в панели: аккаунт → Интеграции → «Выпустить токен».
 
 Подключение к Claude Code:
   claude mcp add operbots -- npx -y ${PACKAGE_NAME}`);
@@ -247,12 +262,12 @@ export function help(): number {
 
 // ── Разбор ключей ────────────────────────────────────────────
 
-function parseFlags(argv: string[]): { url?: string; email?: string } {
-  const flags: { url?: string; email?: string } = {};
+function parseFlags(argv: string[]): { url?: string; token?: string } {
+  const flags: { url?: string; token?: string } = {};
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
     if (item === '--url') flags.url = argv[++index];
-    else if (item === '--email') flags.email = argv[++index];
+    else if (item === '--token') flags.token = argv[++index];
   }
   return flags;
 }

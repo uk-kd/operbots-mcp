@@ -1,26 +1,24 @@
 /**
  * Хранилище доступа: `~/.operbots/credentials.json`.
  *
- * В файле лежит только токен обновления — пароль не сохраняется нигде.
- * Панель при каждом обновлении выдаёт новый токен и сразу гасит старый,
- * поэтому файл переписывается на каждом обновлении, а на время записи
- * берётся блокировка: рядом может работать вторая сессия Claude Code с
- * тем же файлом, и без блокировки они отберут доступ друг у друга.
+ * В файле лежит только токен доступа, выпущенный в панели. Файл пишется
+ * целиком через временный и переименование, а на время записи берётся
+ * блокировка: рядом может работать вторая сессия Claude Code, и две
+ * одновременные записи оставили бы огрызок вместо файла.
  */
 
 import { chmod, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { DEFAULT_REFRESH_COOKIE } from './config.js';
 import { ConfigError } from './errors.js';
 
 export interface StoredProfile {
   /** Адрес панели — он же ключ профиля. */
   baseUrl: string;
-  /** Токен обновления: единственный секрет в файле. */
-  refreshToken: string;
-  /** Имя cookie, под которым панель отдала токен. */
-  cookieName: string;
+  /** Токен доступа: единственный секрет в файле. */
+  token: string;
+  /** Токен обновления от прежних выпусков: только читается, чтобы объяснить отказ. */
+  refreshToken?: string;
   email?: string;
   userId?: string;
   displayName?: string;
@@ -150,30 +148,20 @@ export async function listProfiles(
 /** Сохраняет профиль и делает его текущим. Вызывать под блокировкой. */
 export async function saveProfile(
   path: string,
-  profile: Omit<StoredProfile, 'updatedAt' | 'cookieName'> & { cookieName?: string },
+  profile: Omit<StoredProfile, 'updatedAt' | 'refreshToken'>,
 ): Promise<void> {
   const file = await readCredentials(path);
   const previous = file.profiles[profile.baseUrl];
-  file.profiles[profile.baseUrl] = {
+  const merged: StoredProfile = {
     ...previous,
     ...profile,
-    cookieName: profile.cookieName ?? previous?.cookieName ?? DEFAULT_REFRESH_COOKIE,
     updatedAt: new Date().toISOString(),
   };
+  // Наследство от входа по паролю больше не нужно — стираем, чтобы в
+  // файле не лежал секрет, которым никто не пользуется.
+  delete merged.refreshToken;
+  file.profiles[profile.baseUrl] = merged;
   file.current = profile.baseUrl;
-  await writeCredentials(path, file);
-}
-
-/** Обновляет только токен: так пишется результат каждой ротации. */
-export async function updateRefreshToken(
-  path: string,
-  baseUrl: string,
-  refreshToken: string,
-): Promise<void> {
-  const file = await readCredentials(path);
-  const profile = file.profiles[baseUrl];
-  if (!profile) return;
-  file.profiles[baseUrl] = { ...profile, refreshToken, updatedAt: new Date().toISOString() };
   await writeCredentials(path, file);
 }
 

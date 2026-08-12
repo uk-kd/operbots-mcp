@@ -38,21 +38,13 @@ export const USER_AGENT =
 /** Префикс API панели — совпадает с `api_prefix` в настройках operbots. */
 export const API_PREFIX = '/api/v1';
 
-/** Имя cookie с токеном обновления по умолчанию (`refresh_cookie_name`). */
-export const DEFAULT_REFRESH_COOKIE = 'operbots_refresh';
-
 export interface Config {
   /** Адрес панели без хвостового слэша, если задан явно. */
   baseUrl: string | null;
   /** Путь к файлу с сохранённым доступом. */
   credentialsPath: string;
-  /** Токен обновления из окружения — вместо файла. */
-  refreshToken: string | null;
-  /** Готовый токен доступа: только для отладки, не обновляется. */
-  accessToken: string | null;
-  /** Почта и пароль для входа без участия человека. */
-  email: string | null;
-  password: string | null;
+  /** Токен доступа из окружения — вместо сохранённого файла. */
+  token: string | null;
   /** Дело по умолчанию: подставляется, когда инструмент вызван без `case_id`. */
   defaultCase: string | null;
   /** Скрыть все инструменты, которые что-либо меняют. */
@@ -110,10 +102,7 @@ export function loadConfig(): Config {
     baseUrl: rawBase ? normalizeBaseUrl(rawBase) : null,
     credentialsPath:
       env('OPERBOTS_CREDENTIALS') ?? join(homedir(), '.operbots', 'credentials.json'),
-    refreshToken: env('OPERBOTS_REFRESH_TOKEN'),
-    accessToken: env('OPERBOTS_ACCESS_TOKEN'),
-    email: env('OPERBOTS_EMAIL'),
-    password: env('OPERBOTS_PASSWORD'),
+    token: env('OPERBOTS_TOKEN'),
     defaultCase: env('OPERBOTS_CASE'),
     readOnly: flag('OPERBOTS_READ_ONLY'),
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 30_000,
