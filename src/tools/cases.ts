@@ -38,6 +38,8 @@ interface Overview {
   providers: number;
   flows_active: number;
   members: number;
+  period_days: number;
+  bot_week: number;
   days: { date: string; incoming: number; outgoing: number }[];
 }
 
@@ -79,13 +81,19 @@ export const caseTools: Tool[] = [
     title: 'Открыть дело',
     kind: 'read',
     description:
-      'Карточка дела: права текущего пользователя в нём и сводка — боты, диалоги, сообщения ' +
-      'за неделю, отложенные действия, базы знаний, участники.',
-    input: { case: caseField },
+      'Карточка дела: права текущего пользователя в нём и сводка — боты, диалоги, переписка ' +
+      'за выбранный срок, отложенные действия, базы знаний, участники.',
+    input: {
+      case: caseField,
+      days: z
+        .union([z.literal(7), z.literal(14), z.literal(30)])
+        .optional()
+        .describe('За сколько дней считать переписку: 7, 14 или 30. По умолчанию 7.'),
+    },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const overview = await optional(
-        ctx.api.get<Overview>(`/cases/${found.id}/overview`),
+        ctx.api.get<Overview>(`/cases/${found.id}/overview`, { days: args.days ?? 7 }),
       );
 
       const summary =
@@ -95,7 +103,14 @@ export const caseTools: Tool[] = [
               боты: `всего ${overview.bots_total}, работают ${overview.bots_running}, с ошибкой ${overview.bots_error}`,
               активных_сценариев: overview.flows_active,
               диалоги: `всего ${overview.dialogs_total}, непрочитанных ${overview.dialogs_unread}, у операторов ${overview.dialogs_operator}`,
-              сообщения: `сегодня ${overview.messages_today}, за неделю ${overview.messages_week} (входящих ${overview.incoming_week}, от ИИ ${overview.ai_week}, от операторов ${overview.operator_week})`,
+              сообщения:
+                `сегодня ${overview.messages_today}, ` +
+                `за ${overview.period_days} дн. ${overview.messages_week} ` +
+                `(входящих ${overview.incoming_week})`,
+              кто_отвечал:
+                `сценарий ${overview.bot_week}, ` +
+                `модель ${overview.ai_week}, ` +
+                `оператор ${overview.operator_week}`,
               отложенных_действий: overview.tasks_pending,
               базы_знаний: `${overview.knowledge_bases}, фрагментов ${overview.knowledge_chunks}`,
               подключений_ии: overview.providers,
