@@ -7192,7 +7192,10 @@ function loadConfig() {
 init_errors();
 
 // src/cli.ts
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join3 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
@@ -34188,18 +34191,12 @@ async function confirm(question, fallback) {
   if (!answer) return fallback;
   return answer.startsWith("\u0434") || answer.startsWith("y");
 }
-function run(command, args) {
-  const result = spawnSync(command, args, {
-    stdio: "inherit",
-    shell: process.platform === "win32"
-  });
+function run(command) {
+  const result = spawnSync(command, { stdio: "inherit", shell: true });
   return !result.error && result.status === 0;
 }
 function hasCommand(command) {
-  const result = spawnSync(command, ["--version"], {
-    stdio: "ignore",
-    shell: process.platform === "win32"
-  });
+  const result = spawnSync(`${command} --version`, { stdio: "ignore", shell: true });
   return !result.error && result.status === 0;
 }
 function serverEntry() {
@@ -34207,6 +34204,70 @@ function serverEntry() {
 }
 function isEphemeral(path) {
   return /[\\/]_npx[\\/]/.test(path);
+}
+function installedPluginEntry() {
+  const root = join3(homedir2(), ".claude", "plugins", "cache", MARKETPLACE, PLUGIN);
+  let versions;
+  try {
+    versions = readdirSync(root);
+  } catch {
+    return null;
+  }
+  for (const version2 of [VERSION, ...versions.filter((item) => item !== VERSION)]) {
+    const file2 = join3(root, version2, "dist", "index.js");
+    if (existsSync(file2)) return file2;
+  }
+  return null;
+}
+function checkServer(entry) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [entry], { stdio: ["pipe", "pipe", "pipe"] });
+    let answered = "";
+    let failed = "";
+    let done = false;
+    const finish = (ok, detail) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.kill();
+      resolve({ ok, detail });
+    };
+    const timer = setTimeout(
+      () => finish(false, failed.trim() || "\u0441\u0435\u0440\u0432\u0435\u0440 \u043D\u0435 \u043E\u0442\u0432\u0435\u0442\u0438\u043B \u0437\u0430 15 \u0441\u0435\u043A\u0443\u043D\u0434"),
+      15e3
+    );
+    child.stdout.on("data", (chunk) => {
+      answered += chunk.toString();
+      for (const line of answered.split("\n")) {
+        if (!line.includes('"result"')) continue;
+        try {
+          const message = JSON.parse(line);
+          const info = message.result?.serverInfo;
+          if (info) finish(true, `${info.name} ${info.version}`);
+        } catch {
+        }
+      }
+    });
+    child.stderr.on("data", (chunk) => failed += chunk.toString());
+    child.on("error", (error51) => finish(false, error51.message));
+    child.on(
+      "exit",
+      (code) => finish(false, failed.trim() || `\u0441\u0435\u0440\u0432\u0435\u0440 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043B\u0441\u044F \u0441 \u043A\u043E\u0434\u043E\u043C ${code}`)
+    );
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: PACKAGE_NAME, version: VERSION }
+        }
+      })}
+`
+    );
+  });
 }
 function manualPluginSteps() {
   out(`  /plugin marketplace add ${REPO}`);
@@ -34275,10 +34336,10 @@ async function setup(argv) {
   out();
   if (hasCommand("claude")) {
     out("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E \u043F\u043B\u0430\u0433\u0438\u043D \u043A Claude Code\u2026");
-    const connected = run("claude", ["plugin", "marketplace", "add", REPO]) && run("claude", ["plugin", "install", `${PLUGIN}@${MARKETPLACE}`]);
+    const connected = run(`claude plugin marketplace add ${REPO}`) && run(`claude plugin install ${PLUGIN}@${MARKETPLACE}`);
     out();
     if (connected) {
-      out("\u041F\u043B\u0430\u0433\u0438\u043D \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D. \u041F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u0442\u0438\u0442\u0435 Claude Code \u2014 \u0441\u0435\u0440\u0432\u0435\u0440 \u043F\u043E\u0434\u043D\u0438\u043C\u0435\u0442\u0441\u044F \u0441\u0430\u043C.");
+      await reportServerCheck();
     } else {
       out("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043A\u043E\u043C\u0430\u043D\u0434\u043E\u0439 \u043D\u0435 \u0432\u044B\u0448\u043B\u043E. \u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u0432 Claude Code \u0432\u0440\u0443\u0447\u043D\u0443\u044E:");
       manualPluginSteps();
@@ -34298,6 +34359,27 @@ async function setup(argv) {
   out();
   out(`\u041F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u0432 \u043B\u044E\u0431\u043E\u0439 \u043C\u043E\u043C\u0435\u043D\u0442: ${PACKAGE_NAME} status`);
   return 0;
+}
+async function reportServerCheck() {
+  const entry = installedPluginEntry();
+  if (!entry) {
+    out("\u041F\u043B\u0430\u0433\u0438\u043D \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D, \u043D\u043E \u0444\u0430\u0439\u043B\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0430 \u0432 \u043A\u044D\u0448\u0435 \u043D\u0435 \u043D\u0430\u0448\u043B\u043E\u0441\u044C.");
+    out(`\u041E\u0436\u0438\u0434\u0430\u043B\u0441\u044F: ${join3(homedir2(), ".claude", "plugins", "cache", MARKETPLACE, PLUGIN)}`);
+    out("\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u043C\u0430\u0440\u043A\u0435\u0442\u043F\u043B\u0435\u0439\u0441: claude plugin marketplace update operbots");
+    return;
+  }
+  out("\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u044E \u0437\u0430\u043F\u0443\u0441\u043A \u0441\u0435\u0440\u0432\u0435\u0440\u0430\u2026");
+  const { ok, detail } = await checkServer(entry);
+  if (ok) {
+    out(`\u0421\u0435\u0440\u0432\u0435\u0440 \u043E\u0442\u0432\u0435\u0447\u0430\u0435\u0442: ${detail}.`);
+    out("\u041F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u0442\u0438\u0442\u0435 Claude Code \u2014 \u043F\u043B\u0430\u0433\u0438\u043D \u043F\u043E\u0434\u0445\u0432\u0430\u0442\u0438\u0442\u0441\u044F.");
+    return;
+  }
+  out("\u041F\u043B\u0430\u0433\u0438\u043D \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D, \u043D\u043E \u0441\u0435\u0440\u0432\u0435\u0440 \u043D\u0435 \u043F\u043E\u0434\u043D\u044F\u043B\u0441\u044F. \u0412\u043E\u0442 \u0447\u0442\u043E \u043E\u043D \u0441\u043A\u0430\u0437\u0430\u043B:");
+  out();
+  for (const line of detail.split("\n").slice(0, 12)) out(`  ${line}`);
+  out();
+  out(`\u0417\u0430\u043F\u0443\u0441\u0442\u0438\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443\u044E \u0438 \u043F\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0446\u0435\u043B\u0438\u043A\u043E\u043C: node "${entry}" --version`);
 }
 async function pickCase(cases) {
   if (cases.length === 0) return null;

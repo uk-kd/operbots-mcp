@@ -6,7 +6,10 @@
  * вошёл, и там же отзывается.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -115,21 +118,19 @@ async function confirm(question: string, fallback: boolean): Promise<boolean> {
  *
  * На Windows `claude` и `npm` — это `.cmd`, а не исполняемые файлы, и
  * порождение процесса без оболочки падает с ENOENT. Ровно на этом и
- * ломался запуск сервера через `npx`.
+ * ломался запуск сервера через `npx`, поэтому здесь оболочка нужна.
+ *
+ * Команда собирается строкой, а не списком: список вместе с оболочкой
+ * Node считает опасным и предупреждает об этом на каждый запуск. Все
+ * части здесь — постоянные, снаружи в них ничего не попадает.
  */
-function run(command: string, args: string[]): boolean {
-  const result = spawnSync(command, args, {
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
+function run(command: string): boolean {
+  const result = spawnSync(command, { stdio: 'inherit', shell: true });
   return !result.error && result.status === 0;
 }
 
 function hasCommand(command: string): boolean {
-  const result = spawnSync(command, ['--version'], {
-    stdio: 'ignore',
-    shell: process.platform === 'win32',
-  });
+  const result = spawnSync(`${command} --version`, { stdio: 'ignore', shell: true });
   return !result.error && result.status === 0;
 }
 
@@ -141,6 +142,87 @@ function serverEntry(): string {
 /** Запущены ли мы из временного кэша npx, который уберут. */
 function isEphemeral(path: string): boolean {
   return /[\\/]_npx[\\/]/.test(path);
+}
+
+/** Куда Claude Code кладёт установленный плагин. */
+function installedPluginEntry(): string | null {
+  const root = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE, PLUGIN);
+  let versions: string[];
+  try {
+    versions = readdirSync(root);
+  } catch {
+    return null;
+  }
+  // Свою версию проверяем первой: она же только что поставилась.
+  for (const version of [VERSION, ...versions.filter((item) => item !== VERSION)]) {
+    const file = join(root, version, 'dist', 'index.js');
+    if (existsSync(file)) return file;
+  }
+  return null;
+}
+
+/**
+ * Поднимает сервер тем же способом, каким его поднимет клиент.
+ *
+ * Установщик, который сказал «готово» и ушёл, — половина работы: сервер
+ * падал уже после неё, и человек оставался с кодом ошибки вместо причины.
+ * Здесь настоящее рукопожатие MCP, и если оно не выходит, наружу идёт то,
+ * что сервер написал в поток ошибок.
+ */
+function checkServer(entry: string): Promise<{ ok: boolean; detail: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [entry], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let answered = '';
+    let failed = '';
+    let done = false;
+
+    const finish = (ok: boolean, detail: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.kill();
+      resolve({ ok, detail });
+    };
+
+    const timer = setTimeout(
+      () => finish(false, failed.trim() || 'сервер не ответил за 15 секунд'),
+      15_000,
+    );
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      answered += chunk.toString();
+      for (const line of answered.split('\n')) {
+        if (!line.includes('"result"')) continue;
+        try {
+          const message = JSON.parse(line) as {
+            result?: { serverInfo?: { name: string; version: string } };
+          };
+          const info = message.result?.serverInfo;
+          if (info) finish(true, `${info.name} ${info.version}`);
+        } catch {
+          // Строка ещё не дописана — дождёмся следующего куска.
+        }
+      }
+    });
+    child.stderr.on('data', (chunk: Buffer) => (failed += chunk.toString()));
+    child.on('error', (error) => finish(false, error.message));
+    child.on('exit', (code) =>
+      finish(false, failed.trim() || `сервер завершился с кодом ${code}`),
+    );
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: PACKAGE_NAME, version: VERSION },
+        },
+      })}\n`,
+    );
+  });
 }
 
 function manualPluginSteps(): void {
@@ -239,11 +321,11 @@ export async function setup(argv: string[]): Promise<number> {
   if (hasCommand('claude')) {
     out('Подключаю плагин к Claude Code…');
     const connected =
-      run('claude', ['plugin', 'marketplace', 'add', REPO]) &&
-      run('claude', ['plugin', 'install', `${PLUGIN}@${MARKETPLACE}`]);
+      run(`claude plugin marketplace add ${REPO}`) &&
+      run(`claude plugin install ${PLUGIN}@${MARKETPLACE}`);
     out();
     if (connected) {
-      out('Плагин установлен. Перезапустите Claude Code — сервер поднимется сам.');
+      await reportServerCheck();
     } else {
       out('Подключить командой не вышло. Выполните в Claude Code вручную:');
       manualPluginSteps();
@@ -266,6 +348,31 @@ export async function setup(argv: string[]): Promise<number> {
   out();
   out(`Проверить в любой момент: ${PACKAGE_NAME} status`);
   return 0;
+}
+
+/** Проверяет поставленный плагин и говорит, что делать дальше. */
+async function reportServerCheck(): Promise<void> {
+  const entry = installedPluginEntry();
+  if (!entry) {
+    out('Плагин установлен, но файла сервера в кэше не нашлось.');
+    out(`Ожидался: ${join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE, PLUGIN)}`);
+    out('Обновите маркетплейс: claude plugin marketplace update operbots');
+    return;
+  }
+
+  out('Проверяю запуск сервера…');
+  const { ok, detail } = await checkServer(entry);
+  if (ok) {
+    out(`Сервер отвечает: ${detail}.`);
+    out('Перезапустите Claude Code — плагин подхватится.');
+    return;
+  }
+
+  out('Плагин установлен, но сервер не поднялся. Вот что он сказал:');
+  out();
+  for (const line of detail.split('\n').slice(0, 12)) out(`  ${line}`);
+  out();
+  out(`Запустить вручную и посмотреть целиком: node "${entry}" --version`);
 }
 
 /** Какое дело подставлять, когда инструмент вызван без него. */
