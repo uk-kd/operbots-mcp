@@ -72,7 +72,7 @@ Claude Code.
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_TOKEN` | Токен вместо сохранённого файла: контейнер, сборка |
 | `OPERBOTS_CASE` | Дело по умолчанию: короткое имя, название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 20 вместо 59 |
+| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 21 вместо 61 |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
 | `OPERBOTS_TIMEOUT_MS` | Сколько ждать ответ панели. По умолчанию 30000 |
 | `OPERBOTS_INSECURE_TLS=1` | Не проверять сертификат — для самоподписанного TLS |
@@ -81,7 +81,7 @@ Claude Code.
 
 ## Инструменты
 
-59 штук. Дела, ботов, сценарии и подключения можно называть по имени —
+61 штука. Дела, ботов, сценарии, материалы и подключения можно называть по имени —
 идентификаторы не нужны: `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
 | Раздел | Инструменты |
@@ -92,7 +92,7 @@ Claude Code.
 | **Боты** | `bots_list`, `bots_get`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_rotate`, `bots_delete` |
 | **Сценарии** | `flows_list`, `flows_get`, `flows_save`, `flows_publish`, `flows_versions`, `flows_restore`, `flows_simulate`, `flows_export`, `flows_import`, `flows_delete` |
 | **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_reply`, `dialogs_update`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
-| **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
+| **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_document`, `knowledge_document_update`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
 | **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_test`, `ai_delete` |
 | **Справочники** | `operbots_catalog` — виды узлов с их настройками, заготовки, виды ИИ-сервисов, права |
 

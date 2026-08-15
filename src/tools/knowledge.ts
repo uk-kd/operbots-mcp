@@ -43,6 +43,35 @@ interface Document {
   created_at: string;
 }
 
+interface DocumentDetail extends Document {
+  content: string;
+  chunks: { ordinal: number; text: string }[];
+}
+
+async function findDocument(
+  ctx: Context,
+  caseId: string,
+  baseId: string,
+  hint: string,
+): Promise<Document> {
+  const list = await ctx.api.get<Document[]>(`/cases/${caseId}/knowledge/${baseId}/documents`);
+  const needle = hint.trim().toLowerCase();
+
+  const match =
+    list.find((item) => item.id === hint) ??
+    list.find((item) => item.title.toLowerCase() === needle) ??
+    list.find((item) => item.title.toLowerCase().includes(needle));
+
+  if (!match) {
+    throw new ApiError(
+      404,
+      'document_not_found',
+      `Материала «${hint}» в базе нет. Есть: ${list.map((item) => item.title).join(', ') || 'ни одного'}`,
+    );
+  }
+  return match;
+}
+
 async function findBase(ctx: Context, caseId: string, hint: string): Promise<Base> {
   const list = await ctx.api.get<Base[]>(`/cases/${caseId}/knowledge`);
   const needle = hint.trim().toLowerCase();
@@ -249,6 +278,106 @@ export const knowledgeTools: Tool[] = [
   }),
 
   tool({
+    name: 'knowledge_document',
+    title: 'Материал целиком',
+    kind: 'read',
+    description:
+      'Материал с его текстом: что в нём написано на самом деле. Список материалов текста не ' +
+      'отдаёт. Материал можно назвать по имени — идентификатор не обязателен. С chunks=true ' +
+      'вдобавок покажет нарезку: те самые куски, которыми материал ляжет модели.',
+    input: {
+      case: caseField,
+      base: z.string().describe('База знаний: название или идентификатор.'),
+      document: z.string().describe('Материал: название или идентификатор.'),
+      chunks: z
+        .boolean()
+        .optional()
+        .describe('Показать куски. По умолчанию нет: они повторяют текст и удваивают ответ.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const base = await findBase(ctx, found.id, args.base);
+      const brief = await findDocument(ctx, found.id, base.id, args.document);
+
+      const document = await ctx.api.get<DocumentDetail>(
+        `/cases/${found.id}/knowledge/${base.id}/documents/${brief.id}`,
+      );
+
+      return report(`Материал «${document.title}» из базы «${base.name}»`, {
+        материал: document.title,
+        идентификатор: document.id,
+        откуда: document.source_url ?? document.source,
+        состояние: document.status,
+        ошибка: document.error,
+        символов: document.chars,
+        фрагментов: document.chunks_count,
+        разобран: document.indexed_at,
+        текст: document.content,
+        ...(args.chunks
+          ? {
+              нарезка: document.chunks.map((chunk) => ({
+                номер: chunk.ordinal + 1,
+                символов: chunk.text.length,
+                текст: chunk.text,
+              })),
+            }
+          : {}),
+      });
+    },
+  }),
+
+  tool({
+    name: 'knowledge_document_update',
+    title: 'Изменить материал',
+    kind: 'write',
+    description:
+      'Правит название и текст материала. Изменённый текст сам уходит на пересборку — иначе ' +
+      'бот отвечал бы по прежней нарезке. Вид источника и ссылку сменить нельзя: это уже другой ' +
+      'материал. Для материала по ссылке refetch=true перечитывает страницу заново — страница ' +
+      'забирается один раз, при добавлении, и дальше живёт снимком.',
+    input: {
+      case: caseField,
+      base: z.string().describe('База знаний: название или идентификатор.'),
+      document: z.string().describe('Материал: название или идентификатор.'),
+      title: z.string().max(240).optional().describe('Новое название.'),
+      text: z.string().optional().describe('Новый текст целиком — заменяет прежний.'),
+      refetch: z
+        .boolean()
+        .optional()
+        .describe('Перечитать страницу по ссылке. Только для материала-ссылки.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const base = await findBase(ctx, found.id, args.base);
+      const brief = await findDocument(ctx, found.id, base.id, args.document);
+      const root = `/cases/${found.id}/knowledge/${base.id}/documents/${brief.id}`;
+
+      if (args.refetch) {
+        const updated = await ctx.api.post<DocumentDetail>(`${root}/refetch`);
+        return report(`Страница перечитана, материал «${updated.title}» разбирается заново.`, {
+          символов: updated.chars,
+          состояние: updated.status,
+        });
+      }
+
+      const payload = body({ title: args.title, content: args.text });
+      if (Object.keys(payload).length === 0) {
+        return 'Нечего менять: передайте название, текст или refetch=true.';
+      }
+
+      const updated = await ctx.api.patch<DocumentDetail>(root, payload);
+      return report(`Материал «${updated.title}» изменён.`, {
+        символов: updated.chars,
+        состояние: updated.status,
+        подсказка:
+          updated.status === 'ready'
+            ? undefined
+            : 'Текст изменился — разбор идёт в фоне, проверьте позже.',
+      });
+    },
+  }),
+
+  tool({
     name: 'knowledge_reindex',
     title: 'Пересобрать материалы',
     kind: 'write',
@@ -259,15 +388,19 @@ export const knowledgeTools: Tool[] = [
     input: {
       case: caseField,
       base: z.string().describe('База знаний: название или идентификатор.'),
-      document: z.string().optional().describe('Идентификатор одного материала.'),
+      document: z.string().optional().describe('Один материал: название или идентификатор.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const base = await findBase(ctx, found.id, args.base);
       const root = `/cases/${found.id}/knowledge/${base.id}`;
 
-      const result = args.document
-        ? await ctx.api.post<{ message?: string }>(`${root}/documents/${args.document}/reindex`)
+      const one = args.document
+        ? await findDocument(ctx, found.id, base.id, args.document)
+        : null;
+
+      const result = one
+        ? await ctx.api.post<{ message?: string }>(`${root}/documents/${one.id}/reindex`)
         : await ctx.api.post<{ message?: string }>(`${root}/reindex`);
 
       return result.message ?? 'Материалы поставлены в очередь на разбор.';
@@ -325,7 +458,10 @@ export const knowledgeTools: Tool[] = [
     input: {
       case: caseField,
       base: z.string().describe('База знаний: название или идентификатор.'),
-      document: z.string().optional().describe('Идентификатор материала. Без него удалится вся база.'),
+      document: z
+        .string()
+        .optional()
+        .describe('Материал: название или идентификатор. Без него удалится вся база.'),
       confirm_name: z
         .string()
         .optional()
@@ -337,8 +473,9 @@ export const knowledgeTools: Tool[] = [
       const root = `/cases/${found.id}/knowledge/${base.id}`;
 
       if (args.document) {
-        await ctx.api.delete(`${root}/documents/${args.document}`);
-        return `Материал удалён из базы «${base.name}».`;
+        const one = await findDocument(ctx, found.id, base.id, args.document);
+        await ctx.api.delete(`${root}/documents/${one.id}`);
+        return `Материал «${one.title}» удалён из базы «${base.name}».`;
       }
 
       if (args.confirm_name?.trim() !== base.name) {
