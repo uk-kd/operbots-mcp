@@ -32003,6 +32003,7 @@ var NODE_KINDS = [
   "action.edit",
   "action.delete",
   "action.set_variable",
+  "action.marks",
   "action.delay",
   "action.request",
   "action.handoff",
