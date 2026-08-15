@@ -18,10 +18,9 @@
   ],
   "mcpServers": {
     "operbots": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "operbots-mcp"
+        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
       ]
     }
   }

@@ -9,7 +9,7 @@
 
 import { VERSION } from './config.js';
 import { describeError } from './errors.js';
-import { help, login, logout, status, tools } from './cli.js';
+import { help, login, logout, setup, status, tools } from './cli.js';
 import { serve } from './server.js';
 
 async function main(): Promise<number> {
@@ -20,6 +20,9 @@ async function main(): Promise<number> {
     case 'serve':
       await serve();
       return 0;
+    case 'setup':
+    case 'install':
+      return setup(rest);
     case 'login':
       return login(rest);
     case 'logout':

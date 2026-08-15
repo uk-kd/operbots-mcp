@@ -22,6 +22,10 @@ export interface StoredProfile {
   email?: string;
   userId?: string;
   displayName?: string;
+  /** Дело, которое подставляется, когда инструмент вызван без него. */
+  defaultCase?: string | null;
+  /** Оставить только инструменты чтения. */
+  readOnly?: boolean;
   updatedAt: string;
 }
 
@@ -163,6 +167,27 @@ export async function saveProfile(
   file.profiles[profile.baseUrl] = merged;
   file.current = profile.baseUrl;
   await writeCredentials(path, file);
+}
+
+/**
+ * Дописывает настройки в уже существующий профиль.
+ *
+ * Дело по умолчанию и режим чтения раньше жили только в переменных
+ * окружения, и передать их было некуда: плагин запускает сервер без
+ * окружения вовсе. Здесь они ложатся рядом с токеном — туда, куда
+ * сервер и так смотрит при запуске.
+ */
+export async function saveSettings(
+  path: string,
+  baseUrl: string,
+  settings: { defaultCase?: string | null; readOnly?: boolean },
+): Promise<boolean> {
+  const file = await readCredentials(path);
+  const profile = file.profiles[baseUrl];
+  if (!profile) return false;
+  file.profiles[baseUrl] = { ...profile, ...settings, updatedAt: new Date().toISOString() };
+  await writeCredentials(path, file);
+  return true;
 }
 
 /** Убирает профиль из файла. */

@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { OperbotsApi } from './api.js';
 import { AuthManager } from './auth.js';
-import { PACKAGE_NAME, VERSION, loadConfig, type Config } from './config.js';
+import { PACKAGE_NAME, VERSION, applyProfileSettings, loadConfig, type Config } from './config.js';
 import { Context, type FormAnswer } from './context.js';
 import { describeError } from './errors.js';
 import { accountTools } from './tools/account.js';
@@ -116,7 +116,9 @@ export function createServer(config: Config): McpServer {
 
 /** Запускает сервер на стандартном вводе-выводе — так его зовёт Claude Code. */
 export async function serve(): Promise<void> {
-  const config = loadConfig();
+  // Дело по умолчанию и режим чтения могут лежать в профиле: плагин
+  // запускает сервер без переменных окружения.
+  const config = await applyProfileSettings(loadConfig());
 
   if (config.insecureTls) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';

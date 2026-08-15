@@ -1,21 +1,50 @@
 /**
- * Команды в терминале: вход, выход и проверка подключения.
+ * Команды в терминале: установка, вход, выход и проверка подключения.
  *
  * Вход спрашивает адрес панели и токен доступа. Пароль здесь не нужен и
  * не принимается: токен выпускается в самой панели, где человек уже
  * вошёл, и там же отзывается.
  */
 
+import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 
 import { AuthManager, TOKEN_PREFIX } from './auth.js';
 import { OperbotsApi } from './api.js';
-import { PACKAGE_NAME, VERSION, loadConfig, normalizeBaseUrl } from './config.js';
-import { listProfiles, removeProfile, withCredentialsLock } from './credentials.js';
+import {
+  PACKAGE_NAME,
+  VERSION,
+  applyProfileSettings,
+  loadConfig,
+  normalizeBaseUrl,
+} from './config.js';
+import {
+  listProfiles,
+  loadProfile,
+  removeProfile,
+  saveSettings,
+  withCredentialsLock,
+} from './credentials.js';
 import { describeError } from './errors.js';
 import { selectTools } from './server.js';
 
 const out = (text = '') => process.stdout.write(`${text}\n`);
+
+/** Откуда Claude Code берёт плагин. */
+const REPO = 'uk-kd/operbots-mcp';
+const MARKETPLACE = 'operbots';
+const PLUGIN = 'operbots-mcp';
+
+/** Ниже этого пакет не запустится, а `npx` о версии не предупреждает. */
+const NODE_MIN = 20;
+
+interface PanelCase {
+  id: string;
+  name: string;
+  emoji: string;
+  slug?: string;
+}
 
 /** Прерывание с клавиатуры и забой — в сыром режиме это обычные символы. */
 const CTRL_C = String.fromCharCode(3);
@@ -72,7 +101,174 @@ async function askSecret(question: string): Promise<string> {
   });
 }
 
+/** Да или нет с понятным значением по умолчанию. */
+async function confirm(question: string, fallback: boolean): Promise<boolean> {
+  const answer = (await ask(`${question} (${fallback ? 'Д/н' : 'д/Н'})`)).trim().toLowerCase();
+  if (!answer) return fallback;
+  return answer.startsWith('д') || answer.startsWith('y');
+}
+
+// ── Внешние команды ──────────────────────────────────────────
+
+/**
+ * Зовёт стороннюю программу, показывая её вывод человеку.
+ *
+ * На Windows `claude` и `npm` — это `.cmd`, а не исполняемые файлы, и
+ * порождение процесса без оболочки падает с ENOENT. Ровно на этом и
+ * ломался запуск сервера через `npx`.
+ */
+function run(command: string, args: string[]): boolean {
+  const result = spawnSync(command, args, {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  return !result.error && result.status === 0;
+}
+
+function hasCommand(command: string): boolean {
+  const result = spawnSync(command, ['--version'], {
+    stdio: 'ignore',
+    shell: process.platform === 'win32',
+  });
+  return !result.error && result.status === 0;
+}
+
+/** Полный путь к точке входа сервера — для клиентов без плагинов. */
+function serverEntry(): string {
+  return fileURLToPath(new URL('./index.js', import.meta.url));
+}
+
+function manualPluginSteps(): void {
+  out(`  /plugin marketplace add ${REPO}`);
+  out(`  /plugin install ${PLUGIN}@${MARKETPLACE}`);
+}
+
 // ── Команды ──────────────────────────────────────────────────
+
+/**
+ * Установка одной командой: спрашивает всё нужное и подключает плагин.
+ *
+ * Раньше человек шёл четырьмя шагами по двум разным инструкциям, а
+ * сервер запускался через `npx` — команду, которая разрешается заново
+ * при каждом старте, в чужом окружении. Здесь всё в одном окне, и по
+ * итогу сервер запускается из файла, а не из реестра пакетов.
+ */
+export async function setup(argv: string[]): Promise<number> {
+  const config = loadConfig();
+  const flags = parseFlags(argv);
+
+  out(`${PACKAGE_NAME} ${VERSION} — установка`);
+  out();
+
+  const major = Number(process.versions.node.split('.')[0]);
+  if (!Number.isFinite(major) || major < NODE_MIN) {
+    out(`Нужен Node ${NODE_MIN} или новее, а запущен ${process.versions.node}.`);
+    out('Обновите Node и повторите: https://nodejs.org');
+    return 1;
+  }
+
+  const previous = await loadProfile(config.credentialsPath, null).catch(() => null);
+  const rawUrl =
+    flags.url ??
+    config.baseUrl ??
+    (await ask('Адрес панели', previous?.baseUrl ?? 'http://localhost:8080'));
+
+  let base: string;
+  try {
+    base = normalizeBaseUrl(rawUrl);
+  } catch (error) {
+    out(describeError(error));
+    return 1;
+  }
+
+  if (!flags.token && !config.token) {
+    out();
+    out(`Токен выпускается в панели: ${base}/dashboard/account → Интеграции → «Выпустить токен».`);
+    out('Значение показывается один раз — скопируйте его сразу.');
+    out();
+  }
+
+  const token = flags.token ?? config.token ?? (await askSecret('Токен'));
+  if (!token) {
+    out('Без токена подключаться не к чему.');
+    return 1;
+  }
+
+  const auth = new AuthManager({ ...config, baseUrl: base, token: null });
+  let cases: PanelCase[] = [];
+  try {
+    const user = await auth.signIn(base, token);
+    const api = new OperbotsApi(auth, { ...config, baseUrl: base, token: null });
+    cases = await api.get<PanelCase[]>('/cases').catch(() => []);
+
+    out();
+    out(`Вход выполнен: ${user.display_name} <${user.email}>`);
+    out(`Панель: ${base}`);
+    out(
+      `Доступно дел: ${cases.length}` +
+        (cases.length ? ` — ${cases.map((item) => `${item.emoji} ${item.name}`).join(', ')}` : ''),
+    );
+    out(`Токен сохранён в ${config.credentialsPath}`);
+    if (!user.profile_completed) {
+      out();
+      out('Внимание: профиль не заполнен — откройте панель и пройдите шаг знакомства,');
+      out('иначе API закрыт целиком.');
+    }
+  } catch (error) {
+    out();
+    out(describeError(error));
+    return 1;
+  }
+
+  // ── Настройки рядом с токеном ──────────────────────────────
+  // Плагин запускает сервер без переменных окружения, поэтому спросить
+  // их надо здесь и положить в профиль.
+  const defaultCase = await pickCase(cases);
+  const readOnly = await confirm('Оставить только инструменты чтения?', false);
+  await withCredentialsLock(config.credentialsPath, () =>
+    saveSettings(config.credentialsPath, base, { defaultCase, readOnly }),
+  );
+
+  // ── Подключение к Claude Code ──────────────────────────────
+  out();
+  if (hasCommand('claude')) {
+    out('Подключаю плагин к Claude Code…');
+    const connected =
+      run('claude', ['plugin', 'marketplace', 'add', REPO]) &&
+      run('claude', ['plugin', 'install', `${PLUGIN}@${MARKETPLACE}`]);
+    out();
+    if (connected) {
+      out('Плагин установлен. Перезапустите Claude Code — сервер поднимется сам.');
+    } else {
+      out('Подключить командой не вышло. Выполните в Claude Code вручную:');
+      manualPluginSteps();
+    }
+  } else {
+    out('Claude Code в PATH не нашёлся. Выполните в нём вручную:');
+    manualPluginSteps();
+  }
+
+  out();
+  out('Другой клиент MCP — запускайте сервер по полному пути, без npx:');
+  out(`  node "${serverEntry()}"`);
+  out();
+  out(`Проверить в любой момент: ${PACKAGE_NAME} status`);
+  return 0;
+}
+
+/** Какое дело подставлять, когда инструмент вызван без него. */
+async function pickCase(cases: PanelCase[]): Promise<string | null> {
+  if (cases.length === 0) return null;
+
+  out();
+  out('Дело по умолчанию — его подставят, когда дело не названо.');
+  out('  0. любое — то, что открыто в панели последним');
+  cases.forEach((item, index) => out(`  ${index + 1}. ${item.emoji} ${item.name}`));
+
+  const answer = await ask('Номер', '0');
+  const chosen = cases[Number(answer) - 1];
+  return chosen ? (chosen.slug ?? chosen.name) : null;
+}
 
 export async function login(argv: string[]): Promise<number> {
   const config = loadConfig();
@@ -125,8 +321,8 @@ export async function login(argv: string[]): Promise<number> {
     out(`Токен сохранён в ${config.credentialsPath}`);
     out('Отозвать его можно в панели: аккаунт → Интеграции.');
     out();
-    out('Подключить к Claude Code:');
-    out(`  claude mcp add operbots -- npx -y ${PACKAGE_NAME}`);
+    out('Подключить к Claude Code — одной командой:');
+    out(`  npx ${PACKAGE_NAME}@latest setup`);
     return 0;
   } catch (error) {
     out();
@@ -167,7 +363,7 @@ export async function logout(argv: string[]): Promise<number> {
 }
 
 export async function status(): Promise<number> {
-  const config = loadConfig();
+  const config = await applyProfileSettings(loadConfig());
   const { current, profiles } = await listProfiles(config.credentialsPath);
 
   out(`${PACKAGE_NAME} ${VERSION}`);
@@ -234,13 +430,14 @@ export function help(): number {
   out(`${PACKAGE_NAME} ${VERSION} — MCP-сервер панели operbots
 
 Использование:
+  operbots-mcp setup           установка целиком: токен, настройки, плагин
   operbots-mcp                 запустить сервер MCP (так его вызывает Claude Code)
-  operbots-mcp login           сохранить токен доступа к панели
+  operbots-mcp login           только сохранить токен доступа к панели
   operbots-mcp logout          удалить токен с этой машины
   operbots-mcp status          проверить связь с панелью и показать права
   operbots-mcp tools           перечислить доступные инструменты
 
-Ключи команды login:
+Ключи команд setup и login:
   --url <адрес>                адрес панели, например https://panel.example.com
   --token <${TOKEN_PREFIX}…>            токен, если не хочется вводить его отдельно
 
@@ -256,7 +453,7 @@ export function help(): number {
 Токен выпускается в панели: аккаунт → Интеграции → «Выпустить токен».
 
 Подключение к Claude Code:
-  claude mcp add operbots -- npx -y ${PACKAGE_NAME}`);
+  npx ${PACKAGE_NAME}@latest setup`);
   return 0;
 }
 

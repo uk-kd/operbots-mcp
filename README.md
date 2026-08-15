@@ -22,24 +22,26 @@ MCP-сервер панели [operbots](https://github.com/uk-kd/operbots). Д�
 
 ## Установка
 
-Сначала выпустите токен в панели: **аккаунт → Интеграции → «Выпустить токен»**.
-Значение показывается один раз — скопируйте сразу.
-
-Плагином — сервер пропишется сам и будет обновляться:
-
-```
-/plugin marketplace add uk-kd/operbots-mcp
-/plugin install operbots-mcp@operbots
-```
-
-Или вручную, в любой клиент MCP:
-
 ```bash
-claude mcp add operbots -- npx -y operbots-mcp
+npx operbots-mcp@latest setup
 ```
 
-Дальше скажите Claude «подключись к панели operbots» — откроется окно для адреса
-и токена. Проверить: `npx operbots-mcp status`.
+Одна команда спрашивает всё нужное и подключает плагин сама: адрес панели, токен,
+дело по умолчанию. Токен выпускается в панели — **аккаунт → Интеграции → «Выпустить
+токен»**; значение показывается один раз, скопируйте сразу. По итогу перезапустите
+Claude Code.
+
+Проверить в любой момент: `npx operbots-mcp status`.
+
+Плагин везёт сервер с собой и запускает его настоящим `node` по полному пути. При
+старте ничего не качается и не разрешается по имени — потому что именно там установка
+и разваливалась: `npx` на Windows оказывался `.cmd`, на холодном кэше уходил в реестр
+дольше рукопожатия, а про старый Node молчал вовсе.
+
+### Другие клиенты MCP
+
+`operbots-mcp setup` в конце печатает готовую строку запуска с полным путём — её и
+вставляйте в свой клиент. Плагины Claude Code при этом не нужны.
 
 ---
 
@@ -60,39 +62,36 @@ claude mcp add operbots -- npx -y operbots-mcp
 
 ## Настройки
 
-Все необязательны.
+Все необязательны. Дело по умолчанию и режим чтения спрашивает `setup` и кладёт их
+рядом с токеном: плагин запускает сервер без окружения вовсе, и передать их иначе
+некуда. Переменные при этом главнее профиля — ими переопределяют в контейнере и на
+сборке.
 
 | Переменная | Что делает |
 | --- | --- |
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_TOKEN` | Токен вместо сохранённого файла: контейнер, сборка |
 | `OPERBOTS_CASE` | Дело по умолчанию: короткое имя, название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 18 вместо 55 |
+| `OPERBOTS_READ_ONLY=1` | Оставить только инструменты чтения — 20 вместо 59 |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
 | `OPERBOTS_TIMEOUT_MS` | Сколько ждать ответ панели. По умолчанию 30000 |
 | `OPERBOTS_INSECURE_TLS=1` | Не проверять сертификат — для самоподписанного TLS |
-
-```bash
-claude mcp add operbots \
-  --env OPERBOTS_CASE=magazin-severnyj --env OPERBOTS_READ_ONLY=1 \
-  -- npx -y operbots-mcp
-```
 
 ---
 
 ## Инструменты
 
-55 штук. Дела, ботов, сценарии и подключения можно называть по имени —
+59 штук. Дела, ботов, сценарии и подключения можно называть по имени —
 идентификаторы не нужны: `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
 | Раздел | Инструменты |
 | --- | --- |
 | **Аккаунт** | `operbots_login`, `operbots_logout`, `whoami`, `sessions_list`, `sessions_revoke`, `account_update` |
-| **Дела** | `cases_list`, `cases_get`, `cases_save`, `cases_delete`, `cases_leave` |
+| **Дела** | `cases_list`, `cases_get`, `cases_save`, `cases_delete`, `cases_leave`, `audit_list` |
 | **Люди** | `members_list`, `members_save`, `members_remove`, `case_transfer`, `roles_save`, `roles_delete`, `invites_create`, `invites_revoke` |
 | **Боты** | `bots_list`, `bots_get`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_rotate`, `bots_delete` |
-| **Сценарии** | `flows_list`, `flows_get`, `flows_save`, `flows_publish`, `flows_versions`, `flows_restore`, `flows_simulate`, `flows_delete` |
-| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_reply`, `dialogs_update`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
+| **Сценарии** | `flows_list`, `flows_get`, `flows_save`, `flows_publish`, `flows_versions`, `flows_restore`, `flows_simulate`, `flows_export`, `flows_import`, `flows_delete` |
+| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_reply`, `dialogs_update`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
 | **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
 | **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_test`, `ai_delete` |
 | **Справочники** | `operbots_catalog` — виды узлов с их настройками, заготовки, виды ИИ-сервисов, права |
@@ -131,8 +130,9 @@ what=node_kinds`. Новая редакция создаётся, только �
 ## Команды
 
 ```
+operbots-mcp setup    установка целиком: токен, настройки, плагин
 operbots-mcp          запустить сервер MCP (так его вызывает клиент)
-operbots-mcp login    сохранить токен доступа к панели
+operbots-mcp login    только сохранить токен доступа к панели
 operbots-mcp logout   удалить токен с этой машины
 operbots-mcp status   проверить связь с панелью и показать права
 operbots-mcp tools    перечислить доступные инструменты

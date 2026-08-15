@@ -94,6 +94,27 @@ export function normalizeBaseUrl(raw: string): string {
   return `${parsed.origin}${path}`;
 }
 
+/**
+ * Достаёт настройки из сохранённого профиля — то, чего нет в окружении.
+ *
+ * Плагин Claude Code запускает сервер без переменных вовсе, поэтому дело
+ * по умолчанию и режим чтения приходится хранить рядом с токеном. Окружение
+ * при этом главнее: им переопределяют профиль в контейнере и на сборке.
+ */
+export async function applyProfileSettings(config: Config): Promise<Config> {
+  // Импорт здесь, а не сверху: настройки нужны только при запуске, а
+  // хранилище тянет за собой работу с диском и блокировками.
+  const { loadProfile } = await import('./credentials.js');
+  const profile = await loadProfile(config.credentialsPath, config.baseUrl).catch(() => null);
+  if (!profile) return config;
+
+  return {
+    ...config,
+    defaultCase: env('OPERBOTS_CASE') ?? profile.defaultCase ?? null,
+    readOnly: env('OPERBOTS_READ_ONLY') === null ? Boolean(profile.readOnly) : config.readOnly,
+  };
+}
+
 export function loadConfig(): Config {
   const rawBase = env('OPERBOTS_URL') ?? env('OPERBOTS_BASE_URL');
   const timeout = Number(env('OPERBOTS_TIMEOUT_MS') ?? '30000');
