@@ -554,7 +554,7 @@ export const botTools: Tool[] = [
       const state = await ctx.api.get<{
         url: string;
         pending_update_count: number;
-        last_error_date: number | null;
+        last_error_at: string | null;
         last_error_message: string | null;
         ip_address: string | null;
         max_connections: number | null;
@@ -567,9 +567,7 @@ export const botTools: Tool[] = [
         адрес: state.url || 'не установлен',
         ждут_доставки: state.pending_update_count,
         последняя_ошибка: state.last_error_message,
-        когда_ошибка: state.last_error_date
-          ? new Date(state.last_error_date * 1000).toISOString()
-          : null,
+        когда_ошибка: state.last_error_at,
         адрес_панели: state.ip_address,
         одновременных_подключений: state.max_connections,
         какие_обновления: state.allowed_updates.join(', ') || 'все',
