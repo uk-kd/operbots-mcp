@@ -48,6 +48,9 @@ export const NODE_KINDS = [
   'action.message',
   'action.ai',
   'action.condition',
+  'action.switch',
+  'action.edit',
+  'action.delete',
   'action.set_variable',
   'action.delay',
   'action.request',
@@ -59,6 +62,10 @@ export const NODE_KINDS = [
   'action.validate',
   'action.media',
   'action.schedule',
+  'action.hours',
+  'action.parse_date',
+  'action.format_date',
+  'action.schedule_at',
   'flow.split',
   'flow.merge',
 ] as const;
@@ -69,6 +76,7 @@ export const FLOW_TEMPLATES = [
   'ai_consultant',
   'faq_menu',
   'lead_form',
+  'booking',
   'support_desk',
   'onboarding',
 ] as const;
@@ -82,7 +90,7 @@ export const ROLE_PRESETS = ['owner', 'admin', 'builder', 'operator', 'observer'
 export const BOT_MODES = ['polling', 'webhook'] as const;
 export const DIALOG_MODES = ['bot', 'operator'] as const;
 export const THEME_MODES = ['light', 'dark', 'auto'] as const;
-export const DOCUMENT_SOURCES = ['text', 'url'] as const;
+export const DOCUMENT_SOURCES = ['text', 'url', 'file'] as const;
 
 /** Какие ключи учётных данных нужны каждому виду ИИ-сервиса. */
 export const AI_CREDENTIALS: Record<string, string> = {

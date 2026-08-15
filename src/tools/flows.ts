@@ -5,8 +5,8 @@
  * `data.kind`, координаты — в `position`. Здесь наружу отдаётся плоское
  * представление — id, kind, title, config, x, y — и оно же принимается
  * обратно. Так модель правит сценарий, не разбираясь во внутренностях
- * редактора, а размеры узлов и положение полотна переносятся из текущей
- * редакции, чтобы правка одного узла не сбивала вид всей карты.
+ * редактора, а размеры узлов, положение полотна и оформление переносятся
+ * из текущей редакции, чтобы правка одного узла не сбивала вид всей карты.
  */
 
 import { z } from 'zod';
@@ -19,7 +19,13 @@ interface RawNode {
   id: string;
   type?: string;
   position?: { x: number; y: number };
-  data?: { kind?: string; title?: string; config?: Record<string, unknown> };
+  data?: {
+    kind?: string;
+    title?: string;
+    config?: Record<string, unknown>;
+    /** Цвет узла и прочее оформление полотна — модель их не касается. */
+    [key: string]: unknown;
+  };
   width?: number | null;
   height?: number | null;
 }
@@ -131,11 +137,15 @@ function flatten(graph: RawGraph) {
 }
 
 /**
- * Собирает граф в формате полотна. Размеры узлов и положение карты
- * берутся из текущей редакции: панель их рисует, а модель о них не знает.
+ * Собирает граф в формате полотна. Размеры узлов, положение карты и всё
+ * оформление — цвет узла, цвет и вид связи — берутся из текущей редакции:
+ * панель их рисует, а модель о них не знает и прислать не может. Поэтому
+ * прежнее `data` переносится целиком, а поверх ложится только то, чем
+ * модель распоряжается: вид узла, подпись и настройки.
  */
 function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): RawGraph {
   const sizes = new Map((previous?.nodes ?? []).map((node) => [node.id, node]));
+  const before = new Map((previous?.edges ?? []).map((edge) => [edge.id, edge]));
 
   return {
     nodes: nodes.map((node, index) => {
@@ -148,6 +158,7 @@ function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): Raw
           y: node.y ?? old?.position?.y ?? 80 + Math.floor(index / 4) * 200,
         },
         data: {
+          ...(old?.data ?? {}),
           kind: node.kind,
           title: node.title ?? old?.data?.title ?? '',
           config: node.config ?? old?.data?.config ?? {},
@@ -156,15 +167,24 @@ function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): Raw
         ...(old?.height ? { height: old.height } : {}),
       };
     }),
-    edges: edges.map((edge) => ({
-      id: edge.id ?? `${edge.from}->${edge.to}${edge.out ? `:${edge.out}` : ''}`,
-      source: edge.from,
-      target: edge.to,
-      sourceHandle: edge.out ?? null,
-      targetHandle: null,
-      label: edge.label ?? null,
-      data: {},
-    })),
+    edges: edges.map((edge) => {
+      const id = edge.id ?? `${edge.from}->${edge.to}${edge.out ? `:${edge.out}` : ''}`;
+      const label = edge.label ?? null;
+      // Подпись панель держит в двух местах сразу, и рассинхрон видно
+      // глазом: на связи одно, в её настройках другое.
+      const data = { ...(before.get(id)?.data ?? {}) };
+      if (label === null) delete data.label;
+      else data.label = label;
+      return {
+        id,
+        source: edge.from,
+        target: edge.to,
+        sourceHandle: edge.out ?? null,
+        targetHandle: null,
+        label,
+        data,
+      };
+    }),
     viewport: previous?.viewport ?? { x: 0, y: 0, zoom: 1 },
   };
 }
