@@ -138,6 +138,11 @@ function serverEntry(): string {
   return fileURLToPath(new URL('./index.js', import.meta.url));
 }
 
+/** Запущены ли мы из временного кэша npx, который уберут. */
+function isEphemeral(path: string): boolean {
+  return /[\\/]_npx[\\/]/.test(path);
+}
+
 function manualPluginSteps(): void {
   out(`  /plugin marketplace add ${REPO}`);
   out(`  /plugin install ${PLUGIN}@${MARKETPLACE}`);
@@ -250,7 +255,14 @@ export async function setup(argv: string[]): Promise<number> {
 
   out();
   out('Другой клиент MCP — запускайте сервер по полному пути, без npx:');
-  out(`  node "${serverEntry()}"`);
+  if (isEphemeral(serverEntry())) {
+    // Запуск через npx живёт во временном кэше: путь оттуда работает до
+    // первой уборки, и советовать его — подкладывать грабли.
+    out(`  npm i -g ${PACKAGE_NAME}`);
+    out(`  ${PACKAGE_NAME} status   — покажет путь, который надо вписать в клиент`);
+  } else {
+    out(`  node "${serverEntry()}"`);
+  }
   out();
   out(`Проверить в любой момент: ${PACKAGE_NAME} status`);
   return 0;
@@ -368,6 +380,9 @@ export async function status(): Promise<number> {
 
   out(`${PACKAGE_NAME} ${VERSION}`);
   out(`Файл доступа: ${config.credentialsPath}`);
+  // Путь к серверу — это то, что вписывают в клиент MCP руками. Спрашивать
+  // его больше негде, поэтому печатаем здесь.
+  out(`Файл сервера: ${serverEntry()}${isEphemeral(serverEntry()) ? ' (временный кэш npx!)' : ''}`);
   out();
 
   if (profiles.length === 0 && !config.token) {
