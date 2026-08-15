@@ -1,6 +1,6 @@
 {
   "name": "operbots-mcp",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "MCP-сервер панели operbots: дела, боты, сценарии, диалоги и база знаний из Claude Code",
   "keywords": [
     "mcp",
