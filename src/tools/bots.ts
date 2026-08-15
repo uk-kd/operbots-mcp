@@ -539,6 +539,45 @@ export const botTools: Tool[] = [
   }),
 
   tool({
+    name: 'bots_webhook_check',
+    title: 'Что Telegram знает о вебхуке',
+    kind: 'read',
+    description:
+      'Отчёт самого Telegram: на какой адрес он шлёт обновления, сколько их ждёт доставки и ' +
+      'какой была последняя ошибка доставки. Единственный способ понять, почему бот в режиме ' +
+      'вебхука молчит: со стороны панели всё бывает исправно — адрес публичный, запрос доходит, — ' +
+      'а Telegram не достучался и знает причину. Токен наружу не отдаётся, панель спрашивает сама.',
+    input: { case: caseField, bot: botField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const bot = await ctx.resolveBot(found.id, args.bot);
+      const state = await ctx.api.get<{
+        url: string;
+        pending_update_count: number;
+        last_error_date: number | null;
+        last_error_message: string | null;
+        ip_address: string | null;
+        max_connections: number | null;
+        allowed_updates: string[];
+        verdict: string;
+      }>(`/cases/${found.id}/bots/${bot.id}/webhook/state`);
+
+      return report(`Вебхук бота «${bot.name}»`, {
+        вывод: state.verdict,
+        адрес: state.url || 'не установлен',
+        ждут_доставки: state.pending_update_count,
+        последняя_ошибка: state.last_error_message,
+        когда_ошибка: state.last_error_date
+          ? new Date(state.last_error_date * 1000).toISOString()
+          : null,
+        адрес_панели: state.ip_address,
+        одновременных_подключений: state.max_connections,
+        какие_обновления: state.allowed_updates.join(', ') || 'все',
+      });
+    },
+  }),
+
+  tool({
     name: 'bots_webhook_rotate',
     title: 'Сменить адрес вебхука',
     kind: 'danger',
