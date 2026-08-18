@@ -466,8 +466,9 @@ export const flowTools: Tool[] = [
     description:
       'Проверяет сценарий без Telegram: какой триггер сработал, какие шаги прошли и что бот ' +
       'ответил бы. Диалог нигде не сохраняется, задержки пропускаются, запросы к внешним ' +
-      'адресам не выполняются. Внимание: узлы с ИИ обращаются к настоящей модели и расходуют ' +
-      'её лимиты.',
+      'адресам и весточки в служебный чат не выполняются. Через variables можно подставить ' +
+      'накопленное разговором — так проверяются ветки условий и подстановки. ' +
+      'Внимание: узлы с ИИ обращаются к настоящей модели и расходуют её лимиты.',
     input: {
       case: caseField,
       bot: botField,
@@ -475,6 +476,10 @@ export const flowTools: Tool[] = [
       text: z.string().optional().describe('Текст входящего сообщения.'),
       command: z.string().optional().describe('Команда без косой черты, например start.'),
       callback_data: z.string().optional().describe('Данные нажатой кнопки.'),
+      variables: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe('Переменные разговора на момент прогона: {"город": "Москва"}.'),
     },
     async run(args, ctx) {
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
@@ -486,7 +491,12 @@ export const flowTools: Tool[] = [
         error: string | null;
       }>(
         `${root}/${flowId}/simulate`,
-        body({ text: args.text ?? '', command: args.command, callback_data: args.callback_data }),
+        body({
+          text: args.text ?? '',
+          command: args.command,
+          callback_data: args.callback_data,
+          variables: args.variables,
+        }),
       );
 
       return report(result.matched ? 'Сценарий сработал.' : 'Ни один триггер не подошёл.', {
