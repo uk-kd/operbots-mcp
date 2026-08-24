@@ -72,7 +72,7 @@ async function findDocument(
   return match;
 }
 
-async function findBase(ctx: Context, caseId: string, hint: string): Promise<Base> {
+export async function findBase(ctx: Context, caseId: string, hint: string): Promise<Base> {
   const list = await ctx.api.get<Base[]>(`/cases/${caseId}/knowledge`);
   const needle = hint.trim().toLowerCase();
 
@@ -158,8 +158,8 @@ export const knowledgeTools: Tool[] = [
     description:
       'Без параметра base создаёт базу, с параметром — меняет её настройки. Для поиска базе ' +
       'нужно подключение к ИИ-сервису, умеющему считать векторы. Подключение можно сменить ' +
-      'только у пустой базы: векторы разных моделей несопоставимы. После правки размера куска ' +
-      'старые материалы нужно пересобрать через knowledge_reindex.',
+      'или снять (provider=null) только у пустой базы: векторы разных моделей несопоставимы. ' +
+      'После правки размера куска старые материалы нужно пересобрать через knowledge_reindex.',
     input: {
       case: caseField,
       base: z.string().optional().describe('Какую базу менять. Не указывайте, чтобы создать новую.'),
@@ -167,8 +167,12 @@ export const knowledgeTools: Tool[] = [
       description: z.string().max(2000).optional().describe('Для чего она.'),
       provider: z
         .string()
+        .nullable()
         .optional()
-        .describe('Подключение к ИИ-сервису для векторов: название или идентификатор.'),
+        .describe(
+          'Подключение к ИИ-сервису для векторов: название или идентификатор. ' +
+            'null — отвязать сервис от базы; после этого поиск не работает, пока не выбран новый.',
+        ),
       chunk_size: z
         .number()
         .int()
@@ -205,7 +209,9 @@ export const knowledgeTools: Tool[] = [
       const payload = body({
         name: args.name,
         description: args.description,
-        provider_id: provider?.id,
+        // Явный null — отвязка: ai_delete не даёт удалить сервис, пока
+        // его держит база, а снять его было нечем.
+        provider_id: args.provider === null ? null : provider?.id,
         chunk_size: args.chunk_size,
         chunk_overlap: args.chunk_overlap,
         top_k: args.top_k,
@@ -215,9 +221,18 @@ export const knowledgeTools: Tool[] = [
 
       if (!args.base) {
         if (!args.name) return 'Чтобы создать базу знаний, нужно название.';
-        const created = await ctx.api.post<Base>(`/cases/${found.id}/knowledge`, payload);
+        // При заведении панель принимает не всё: is_active в её схеме
+        // создания нет, и переданный active потерялся бы молча.
+        const { is_active: _, ...fresh } = payload;
+        const created = await ctx.api.post<Base>(`/cases/${found.id}/knowledge`, fresh);
+        const ready =
+          args.active === undefined
+            ? created
+            : await ctx.api.patch<Base>(`/cases/${found.id}/knowledge/${created.id}`, {
+                is_active: args.active,
+              });
         return report('База знаний создана.', {
-          ...showBase(created),
+          ...showBase(ready),
           дальше: 'Добавьте материалы: knowledge_add_document.',
         });
       }

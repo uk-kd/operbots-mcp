@@ -1,14 +1,16 @@
 /**
- * Боты: подключение по токену, запуск, меню команд и переменные контента.
+ * Боты: подключение по токену, запуск, меню команд, переменные контента
+ * и журнал — что бот делал сам, пока никто не смотрел.
  */
 
 import { z } from 'zod';
 
+import type { Page } from '../api.js';
 import type { Context } from '../context.js';
 import { BOT_MODES } from '../enums.js';
 import { ApiError } from '../errors.js';
-import { report } from '../format.js';
-import { caseField, botField, body, optional, tool, type Tool } from './kit.js';
+import { MASK, pageFooter, report } from '../format.js';
+import { caseField, botField, body, limitField, optional, tool, type Tool } from './kit.js';
 
 interface Bot {
   id: string;
@@ -69,6 +71,27 @@ interface Provider {
   is_active: boolean;
 }
 
+/** Запись журнала бота. */
+interface BotEvent {
+  id: string;
+  kind: string;
+  /** Название вида по-русски: «Ответ модели», «Запуск». */
+  title: string;
+  group: string;
+  level: string;
+  summary: string;
+  dialog_id: string | null;
+  meta: Record<string, unknown>;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+interface JournalFilters {
+  kinds: { kind: string; group: string; title: string; count: number }[];
+  levels: Record<string, number>;
+  total: number;
+}
+
 /** Карточка бота без секретов: адрес вебхука содержит рабочий ключ. */
 function showBot(bot: Bot, full = false) {
   return {
@@ -90,6 +113,48 @@ function showBot(bot: Bot, full = false) {
     запущен: bot.started_at,
     последнее_обновление: bot.last_update_at,
   };
+}
+
+/**
+ * Адрес в готовой фразе панели. Хвостовая пунктуация в адрес не входит:
+ * иначе точка из «…ждёт их на {адрес}.» ушла бы внутрь ключа.
+ */
+const WEBHOOK_URL = /https?:\/\/\S+?(?=[.,;:!?»)]*(?:\s|$))/g;
+
+/**
+ * Прячет секретную часть адреса вебхука так же, как журнал панели:
+ * скрыт только хвост пути после /tg/, всё остальное на месте.
+ *
+ * В этом хвосте лежит рабочий ключ бота: кто его знает, шлёт боту
+ * обновления мимо Telegram. Ради утечки такого адреса и заведён
+ * bots_webhook_rotate — печатать его в ответ читающего инструмента
+ * значит раздавать то, от чего он спасает. А хост и последние знаки
+ * ключа оставляем: по ним видно, куда именно ушёл вебхук.
+ */
+function hideWebhook(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const cut = parsed.pathname.lastIndexOf('/');
+    const secret = parsed.pathname.slice(cut + 1);
+    const hidden = secret.length > 4 ? `${MASK}${secret.slice(-4)}` : secret;
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname.slice(0, cut + 1)}${hidden}`;
+  } catch {
+    return 'адрес неразборчив';
+  }
+}
+
+/**
+ * То же для готовых фраз панели: в выводе адрес приходит целиком.
+ *
+ * Сверяем адреса до укорочения и говорим прямо: вся фраза «шлёт на
+ * один, а ждём на другой» держится на разнице в пути, а путь — как раз
+ * то, что прикрыто.
+ */
+function hideWebhooksIn(text: string): string {
+  const found = text.match(WEBHOOK_URL) ?? [];
+  const hidden = text.replace(WEBHOOK_URL, (url) => hideWebhook(url));
+  if (found.length < 2) return hidden;
+  return `${hidden} (${found.every((url) => url === found[0]) ? 'адреса совпадают' : 'адреса разные'})`;
 }
 
 export async function findProvider(ctx: Context, caseId: string, hint: string): Promise<Provider> {
@@ -215,6 +280,72 @@ export const botTools: Tool[] = [
   }),
 
   tool({
+    name: 'bots_journal',
+    title: 'Журнал бота',
+    kind: 'read',
+    description:
+      'Что делал сам бот: запуски и остановки, входящие обновления, ответы модели и сколько ' +
+      'она думала, ожидание ответа по сценарию, отложенные действия, ошибки сценария и отказы ' +
+      'Telegram. Журнал дела (audit_list) пишет действия людей — этот пишет действия бота, ' +
+      'и на вопрос «почему бот молчит» отвечает именно он. Записи идут от свежих к старым; ' +
+      'сузить можно видом (kind) и уровнем — level=error оставит одни сбои. Какие виды у ' +
+      'этого бота вообще встречались и сколько их, перечислено в конце ответа. Журнал — ' +
+      'недавняя история, а не архив: старые записи панель убирает сама.',
+    input: {
+      case: caseField,
+      bot: botField,
+      kind: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Виды записей, например ai.error, flow.error, update.in, message.out. ' +
+            'Подходит любой из перечисленных.',
+        ),
+      level: z
+        .enum(['info', 'warn', 'error'])
+        .optional()
+        .describe('info — обычные записи, warn — предупреждения, error — сбои.'),
+      limit: limitField(200, 30),
+      offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const bot = await ctx.resolveBot(found.id, args.bot);
+      const root = `/cases/${found.id}/bots/${bot.id}/journal`;
+
+      const [page, filters] = await Promise.all([
+        ctx.api.get<Page<BotEvent>>(root, {
+          kind: args.kind,
+          level: args.level,
+          limit: args.limit,
+          offset: args.offset,
+        }),
+        optional(ctx.api.get<JournalFilters>(`${root}/filters`)),
+      ]);
+
+      return report(`Журнал бота «${bot.name}» — ${pageFooter(page)}`, {
+        записи: page.items.map((item) => ({
+          когда: item.created_at,
+          что: item.summary,
+          вид: `${item.title} (${item.kind})`,
+          // Обычные записи ничем не выделяются — уровень стоит показывать
+          // только там, где он о чём-то говорит.
+          уровень: item.level === 'info' ? undefined : item.level,
+          диалог: item.dialog_id,
+          заняло_мс: item.duration_ms,
+          подробности: item.meta,
+        })),
+        какие_виды_есть:
+          typeof filters === 'string'
+            ? filters
+            : filters.kinds.map(
+                (item) => `${item.kind} — ${item.title}, записей ${item.count}`,
+              ),
+      });
+    },
+  }),
+
+  tool({
     name: 'bots_save',
     title: 'Подключить или настроить бота',
     kind: 'write',
@@ -242,12 +373,19 @@ export const botTools: Tool[] = [
       enabled: z.boolean().optional().describe('Включён ли бот. false останавливает работающего.'),
       ai_provider: z
         .string()
+        .nullable()
         .optional()
-        .describe('Подключение к ИИ-сервису: название или идентификатор.'),
+        .describe(
+          'Подключение к ИИ-сервису: название или идентификатор. ' +
+            'null — отвязать сервис от бота, ничего взамен не назначая.',
+        ),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const provider = args.ai_provider ? await findProvider(ctx, found.id, args.ai_provider) : null;
+      // Явный null — отвязка: без неё ai_delete упирался в «сначала
+      // отвяжите от ботов», а отвязать было нечем.
+      const aiProviderId = args.ai_provider === null ? null : provider?.id;
 
       if (!args.bot) {
         if (!args.name || !args.token) {
@@ -285,7 +423,7 @@ export const botTools: Tool[] = [
         mode: args.mode,
         autostart: args.autostart,
         is_enabled: args.enabled,
-        ai_provider_id: provider?.id,
+        ai_provider_id: aiProviderId,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 
@@ -546,7 +684,9 @@ export const botTools: Tool[] = [
       'Отчёт самого Telegram: на какой адрес он шлёт обновления, сколько их ждёт доставки и ' +
       'какой была последняя ошибка доставки. Единственный способ понять, почему бот в режиме ' +
       'вебхука молчит: со стороны панели всё бывает исправно — адрес публичный, запрос доходит, — ' +
-      'а Telegram не достучался и знает причину. Токен наружу не отдаётся, панель спрашивает сама.',
+      'а Telegram не достучался и знает причину. Ни токен, ни секретный ключ из адреса наружу ' +
+      'не отдаются: адрес показан без ключа, а вывод прямо говорит, тот ли это адрес, ' +
+      'которого ждёт панель.',
     input: { case: caseField, bot: botField },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -563,8 +703,8 @@ export const botTools: Tool[] = [
       }>(`/cases/${found.id}/bots/${bot.id}/webhook/state`);
 
       return report(`Вебхук бота «${bot.name}»`, {
-        вывод: state.verdict,
-        адрес: state.url || 'не установлен',
+        вывод: hideWebhooksIn(state.verdict),
+        адрес: state.url ? `${hideWebhook(state.url)} — ключ показан хвостом` : 'не установлен',
         ждут_доставки: state.pending_update_count,
         последняя_ошибка: state.last_error_message,
         когда_ошибка: state.last_error_at,

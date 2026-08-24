@@ -21,10 +21,14 @@ interface NodeType {
 
 interface Template {
   key: string;
+  /** Название, которым панель заполняет свою форму создания. */
+  name: string;
   title: string;
   description: string;
   nodes: number;
   edges: number;
+  /** Сколько узлов заготовки ждут подключения к ИИ и базы знаний. */
+  needs: { ai: number; knowledge: number };
 }
 
 interface AIKind {
@@ -102,9 +106,21 @@ export const catalogTools: Tool[] = [
             list.map((item) => ({
               ключ: item.key,
               название: item.title,
+              // Этим панель заполняет своё поле «Название» в форме
+              // создания. Через flows_save название всегда своё: name
+              // там обязателен, и шаблонное не подставляется.
+              название_по_умолчанию_в_панели: item.name,
               описание: item.description,
               узлов: item.nodes,
               связей: item.edges,
+              // Заготовка с узлами «Ответ ИИ» без подключения отвечает
+              // пустотой, а с базой, которую не выбрали, — «из головы».
+              нужно: item.needs?.ai
+                ? `узлов с ИИ ${item.needs.ai}` +
+                  (item.needs.knowledge ? `, из них с базой знаний ${item.needs.knowledge}` : '') +
+                  '; передайте flows_save provider' +
+                  (item.needs.knowledge ? ' и knowledge_base' : '')
+                : undefined,
             })),
           );
         }

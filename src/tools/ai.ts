@@ -150,7 +150,16 @@ export const aiTools: Tool[] = [
         if (!args.name || !args.kind) {
           return 'Чтобы подключить ИИ-сервис, нужны название и вид сервиса (kind).';
         }
-        const created = await ctx.api.post<Provider>(`/cases/${found.id}/ai-providers`, payload);
+        // Схема создания на панели is_active не принимает: передали бы —
+        // потеряли бы молча, и active=false ничего не выключил бы.
+        const { is_active: _, ...fresh } = payload;
+        const added = await ctx.api.post<Provider>(`/cases/${found.id}/ai-providers`, fresh);
+        const created =
+          args.active === undefined
+            ? added
+            : await ctx.api.patch<Provider>(`/cases/${found.id}/ai-providers/${added.id}`, {
+                is_active: args.active,
+              });
         return report('ИИ-сервис подключён.', {
           ...show(created),
           дальше: 'Проверьте живым запросом: ai_test.',
@@ -217,7 +226,9 @@ export const aiTools: Tool[] = [
     kind: 'danger',
     description:
       'Удаляет подключение вместе с сохранёнными ключами. Пока сервис используют боты, ' +
-      'панель удалить его не даст — сначала отвяжите его от ботов.',
+      'панель удалить его не даст: отвяжите его от каждого бота (bots_save ai_provider=null) ' +
+      'и от баз знаний (knowledge_save provider=null), а из узлов «Ответ ИИ» уберите ' +
+      'provider_id через flows_save.',
     input: {
       case: caseField,
       provider: z.string().describe('Подключение: название или идентификатор.'),

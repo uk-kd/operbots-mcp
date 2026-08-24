@@ -68,7 +68,7 @@ async function findRole(ctx: Context, caseId: string, hint: string): Promise<Rol
   return match;
 }
 
-async function findMember(ctx: Context, caseId: string, hint: string): Promise<Member> {
+export async function findMember(ctx: Context, caseId: string, hint: string): Promise<Member> {
   const members = await ctx.api.get<Member[]>(`/cases/${caseId}/members`);
   const needle = hint.trim().toLowerCase();
 
@@ -332,12 +332,21 @@ export const peopleTools: Tool[] = [
 
       if (!args.role) {
         if (!args.name) return 'Чтобы создать роль, нужно название.';
+        // Порядок при заведении панель не принимает — только правкой,
+        // иначе position терялся бы молча.
+        const { position: _, ...fresh } = changes;
         const created = await ctx.api.post<Role>(`/cases/${found.id}/roles`, {
           name: args.name,
-          ...changes,
+          ...fresh,
           permissions: args.permissions ?? [],
         });
-        return report('Роль создана.', showRole(created));
+        const placed =
+          args.position === undefined
+            ? created
+            : await ctx.api.patch<Role>(`/cases/${found.id}/roles/${created.id}`, {
+                position: args.position,
+              });
+        return report('Роль создана.', showRole(placed));
       }
 
       const role = await findRole(ctx, found.id, args.role);

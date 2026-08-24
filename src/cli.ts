@@ -29,6 +29,7 @@ import {
   saveSettings,
   withCredentialsLock,
 } from './credentials.js';
+import { PERMISSIONS } from './enums.js';
 import { describeError } from './errors.js';
 import { selectTools } from './server.js';
 
@@ -311,7 +312,7 @@ export async function setup(argv: string[]): Promise<number> {
   // Плагин запускает сервер без переменных окружения, поэтому спросить
   // их надо здесь и положить в профиль.
   const defaultCase = await pickCase(cases);
-  const readOnly = await confirm('Оставить только инструменты чтения?', false);
+  const readOnly = await confirm('Оставить только чтение? (вход и выход останутся)', false);
   await withCredentialsLock(config.credentialsPath, () =>
     saveSettings(config.credentialsPath, base, { defaultCase, readOnly }),
   );
@@ -517,7 +518,9 @@ export async function status(): Promise<number> {
     out(`Связь с панелью есть: ${user.display_name} <${user.email}>`);
     for (const item of cases) {
       const role = item.is_owner ? 'владелец' : (item.role_name ?? 'без роли');
-      out(`  ${item.emoji} ${item.name} — ${role}, прав ${item.permissions.length} из 27`);
+      out(
+        `  ${item.emoji} ${item.name} — ${role}, прав ${item.permissions.length} из ${PERMISSIONS.length}`,
+      );
     }
   } catch (error) {
     out(`Связи с панелью нет: ${describeError(error)}`);
@@ -567,7 +570,7 @@ export function help(): number {
   OPERBOTS_URL                 адрес панели
   OPERBOTS_TOKEN               токен доступа вместо сохранённого файла
   OPERBOTS_CASE                дело по умолчанию: название или идентификатор
-  OPERBOTS_READ_ONLY=1         оставить только инструменты чтения
+  OPERBOTS_READ_ONLY=1         только чтение (вход и выход остаются)
   OPERBOTS_CREDENTIALS         путь к файлу с сохранённым доступом
   OPERBOTS_TIMEOUT_MS          сколько ждать ответ панели, по умолчанию 30000
   OPERBOTS_INSECURE_TLS=1      не проверять сертификат панели

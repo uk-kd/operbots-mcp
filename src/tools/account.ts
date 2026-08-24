@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { TOKEN_PREFIX } from '../auth.js';
 import { PACKAGE_NAME, normalizeBaseUrl } from '../config.js';
 import { removeProfile, withCredentialsLock } from '../credentials.js';
+import { PERMISSIONS } from '../enums.js';
 import { report } from '../format.js';
 import { tool, type Tool } from './kit.js';
 
@@ -23,6 +24,7 @@ export const accountTools: Tool[] = [
     name: 'operbots_login',
     title: 'Подключиться к панели',
     kind: 'write',
+    session: true,
     description:
       'Открывает окно для адреса панели и токена доступа. Токен выпускается в самой панели: ' +
       'аккаунт → Интеграции → «Выпустить токен», и показывается там один раз. ' +
@@ -107,7 +109,8 @@ export const accountTools: Tool[] = [
               )
             : 'ни одного',
         подсказка: !user.profile_completed
-          ? 'Профиль не заполнен — откройте панель и пройдите шаг знакомства, иначе API закрыт целиком.'
+          ? 'Профиль не заполнен, и до этого API закрыт целиком. Заполните его отсюда: ' +
+            'account_update с фамилией, именем и датой рождения (birth_date).'
           : 'Отозвать токен можно в панели: аккаунт → Интеграции.',
       });
     },
@@ -117,6 +120,7 @@ export const accountTools: Tool[] = [
     name: 'operbots_logout',
     title: 'Забыть доступ на этой машине',
     kind: 'danger',
+    session: true,
     description:
       'Стирает сохранённый токен с этой машины. Сам токен при этом продолжает действовать — ' +
       'чтобы он перестал работать везде, отзовите его в панели: аккаунт → Интеграции.',
@@ -157,7 +161,7 @@ export const accountTools: Tool[] = [
         дело: `${item.emoji} ${item.name}`,
         идентификатор: item.id,
         роль: item.is_owner ? 'владелец' : (item.role_name ?? 'без роли'),
-        прав: `${item.permissions.length} из 27`,
+        прав: `${item.permissions.length} из ${PERMISSIONS.length}`,
         боты: `${item.running_bots_count} из ${item.bots_count} работают`,
         непрочитано: item.unread_count || undefined,
         архив: item.is_archived || undefined,
@@ -217,12 +221,17 @@ export const accountTools: Tool[] = [
     title: 'Изменить данные аккаунта',
     kind: 'write',
     description:
-      'Меняет ФИО, телефон и часовой пояс учётной записи. Передавайте только те поля, ' +
-      'которые нужно изменить: остальные останутся как есть.',
+      'Меняет ФИО, дату рождения, телефон и часовой пояс учётной записи. Передавайте только ' +
+      'те поля, которые нужно изменить: остальные останутся как есть. Этим же инструментом ' +
+      'проходят шаг знакомства: пока фамилии, имени и даты рождения нет, API закрыт целиком.',
     input: {
       last_name: z.string().max(80).optional().describe('Фамилия.'),
       first_name: z.string().max(80).optional().describe('Имя.'),
       middle_name: z.string().max(80).optional().describe('Отчество.'),
+      birth_date: z
+        .string()
+        .optional()
+        .describe('Дата рождения в виде ГГГГ-ММ-ДД. Без неё профиль считается незаполненным.'),
       phone: z.string().max(32).optional().describe('Телефон.'),
       timezone: z.string().max(64).optional().describe('Часовой пояс, например Europe/Moscow.'),
     },
@@ -235,8 +244,10 @@ export const accountTools: Tool[] = [
       const user = await ctx.api.patch<Record<string, unknown>>('/users/me', payload);
       return report('Данные обновлены.', {
         имя: user.full_name,
+        дата_рождения: user.birth_date,
         телефон: user.phone,
         часовой_пояс: user.timezone,
+        профиль_заполнен: user.profile_completed,
       });
     },
   }),

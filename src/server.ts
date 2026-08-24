@@ -35,7 +35,8 @@ const ALL_TOOLS: Tool[] = [
 
 /** Что показываем клиенту с учётом режима «только чтение». */
 export function selectTools(config: Config): Tool[] {
-  return config.readOnly ? ALL_TOOLS.filter((item) => item.kind === 'read') : ALL_TOOLS;
+  if (!config.readOnly) return ALL_TOOLS;
+  return ALL_TOOLS.filter((item) => item.kind === 'read' || item.session);
 }
 
 export function buildContext(config: Config): Context {
@@ -52,7 +53,7 @@ export function createServer(config: Config): McpServer {
     {
       instructions:
         'operbots — панель управления телеграм-ботами: дела, боты, сценарии на полотне, ' +
-        'диалоги, база знаний и подключения к ИИ.\n\n' +
+        'диалоги, рассылки, база знаний и подключения к ИИ.\n\n' +
         'Сервер работает от имени вошедшего пользователя и ограничен ровно его правами: ' +
         'всё, что не позволено роли в панели, вернёт отказ. Начните с whoami, чтобы узнать ' +
         'учётную запись, доступные дела и права в них.\n\n' +
@@ -60,7 +61,11 @@ export function createServer(config: Config): McpServer {
         'не обязательны. Если дело не указано, берётся дело по умолчанию, иначе последнее ' +
         'открытое в панели.\n\n' +
         'Правка сценария заменяет граф целиком: сначала flows_get, затем flows_save со всеми ' +
-        'узлами и связями. Состав настроек каждого вида узла — в operbots_catalog what=node_kinds.',
+        'узлами и связями. Состав настроек каждого вида узла — в operbots_catalog ' +
+        'what=node_kinds.\n\n' +
+        'Рассылка идёт в два шага: broadcasts_save заводит черновик, отправку начинает ' +
+        'broadcasts_start, и она необратима. Между ними — broadcasts_preview: пустой отбор ' +
+        'означает всех собеседников бота.',
     },
   );
 

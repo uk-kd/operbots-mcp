@@ -55,17 +55,86 @@ jobs:
         run: npm run typecheck
 
       # Пересобираем после смены версии: она попадает в вывод --version.
+      #
+      # Проверяем оба выпускаемых файла. `dist/index.js` — вывод tsc, он
+      # уходит в npm; `plugins/operbots-mcp/dist/index.js` — сборка
+      # esbuild, и именно её запускает Claude Code. Раньше вторую не
+      # поднимали ни разу: сломанная сборка плагина доезжала до людей.
+      #
+      # И не просто `--version`: сервер должен ответить на рукопожатие по
+      # stdio и перечислить инструменты — иначе клиент увидит пустоту.
       - name: Проверка запуска
         run: |
           npm run build
-          got=$(node dist/index.js --version)
-          if [ "$got" != "${{ steps.version.outputs.value }}" ]; then
-            echo "Собранный сервер сообщает версию $got вместо ${{ steps.version.outputs.value }}" >&2
-            exit 1
-          fi
-          count=$(node dist/index.js tools | wc -l)
-          echo "Инструментов: $count"
-          [ "$count" -gt 0 ]
+          cat > handshake.mjs <<'NODE'
+          import { spawn } from 'node:child_process';
+
+          const target = process.argv[2];
+          const child = spawn(process.execPath, [target], { stdio: ['pipe', 'pipe', 'inherit'] });
+          const replies = new Map();
+          let buffer = '';
+
+          child.stdout.on('data', (chunk) => {
+            buffer += chunk;
+            let cut = buffer.indexOf('\n');
+            while (cut >= 0) {
+              const line = buffer.slice(0, cut).trim();
+              buffer = buffer.slice(cut + 1);
+              if (line) {
+                const message = JSON.parse(line);
+                if (message.id !== undefined) replies.set(message.id, message);
+              }
+              cut = buffer.indexOf('\n');
+            }
+          });
+
+          const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+
+          const wait = async (id) => {
+            for (let attempt = 0; attempt < 150; attempt += 1) {
+              const reply = replies.get(id);
+              if (reply) return reply;
+              await new Promise((done) => setTimeout(done, 100));
+            }
+            throw new Error(`${target}: ответа на запрос ${id} не дождались`);
+          };
+
+          send({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-06-18',
+              capabilities: {},
+              clientInfo: { name: 'release-check', version: '0' },
+            },
+          });
+          const hello = await wait(1);
+          const server = hello.result?.serverInfo;
+          if (!server?.name) {
+            throw new Error(`${target}: сервер не представился — ${JSON.stringify(hello)}`);
+          }
+
+          send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+          send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+          const listed = await wait(2);
+          const tools = listed.result?.tools ?? [];
+          if (tools.length === 0) {
+            throw new Error(`${target}: инструментов не объявлено ни одного`);
+          }
+
+          console.log(`${target}: ${server.name} ${server.version}, инструментов ${tools.length}`);
+          child.kill();
+          NODE
+          for target in dist/index.js plugins/operbots-mcp/dist/index.js; do
+            got=$(node "$target" --version)
+            if [ "$got" != "${{ steps.version.outputs.value }}" ]; then
+              echo "$target сообщает версию $got вместо ${{ steps.version.outputs.value }}" >&2
+              exit 1
+            fi
+            node handshake.mjs "$target"
+          done
+          rm handshake.mjs
 
       # Версию могли выложить руками до того, как метка доехала до CI.
       - name: Не опубликована ли уже

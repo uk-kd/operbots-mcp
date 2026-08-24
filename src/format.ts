@@ -12,6 +12,34 @@ const NOISE = new Set(['avatar_url', 'initials', 'appearance', 'accent_hint']);
 /** Ключи-секреты: их не показываем, даже если панель вернула значение. */
 const SECRET = /token|secret|password|api_key/i;
 
+/** С чего начинается замаскированное значение. */
+export const MASK = '···';
+
+/**
+ * Машинное поле: уходит модели как есть, без маски и без выброшенных
+ * пустых значений.
+ *
+ * Маска и чистка — для карточек, которые читает человек. К настройкам
+ * узла их применять нельзя: круг flows_get → flows_save записал бы в
+ * сценарий «···1234» вместо ключа, а пустую строку потерял бы вовсе.
+ */
+export class Raw {
+  constructor(readonly value: unknown) {}
+}
+
+/** Отдать значение дословно, JSON-блоком. */
+export function raw(value: unknown): Raw {
+  return new Raw(value);
+}
+
+function jsonBlock(value: unknown, pad: string): string {
+  const text = JSON.stringify(value, null, 2) ?? String(value);
+  return text
+    .split('\n')
+    .map((line) => `${pad}${line}`)
+    .join('\n');
+}
+
 function isEmpty(value: unknown): boolean {
   if (value === null || value === undefined || value === '') return true;
   if (Array.isArray(value)) return value.length === 0;
@@ -33,6 +61,7 @@ function isScalar(value: unknown): boolean {
 export function render(value: unknown, indent = 0): string {
   const pad = '  '.repeat(indent);
 
+  if (value instanceof Raw) return jsonBlock(value.value, pad);
   if (isScalar(value)) return `${pad}${scalar(value)}`;
 
   if (Array.isArray(value)) {
@@ -55,7 +84,7 @@ export function render(value: unknown, indent = 0): string {
     .map(([key, item]) => {
       const label = `${pad}${key}:`;
       if (SECRET.test(key) && typeof item === 'string' && item.length > 12) {
-        return `${label} ···${item.slice(-4)}`;
+        return `${label} ${MASK}${item.slice(-4)}`;
       }
       if (isScalar(item)) return `${label} ${scalar(item)}`;
       if (Array.isArray(item) && item.every(isScalar)) return `${label} ${item.join(', ')}`;
