@@ -10,9 +10,9 @@
 import { API_PREFIX, USER_AGENT, type Config } from './config.js';
 import type { AuthManager } from './auth.js';
 import { ApiError } from './errors.js';
-import { parse, send } from './http.js';
+import { parse, parseText, send } from './http.js';
 
-export type Query = Record<string, string | number | boolean | undefined | null>;
+export type Query = Record<string, string | number | boolean | string[] | undefined | null>;
 
 interface CallOptions {
   query?: Query;
@@ -53,12 +53,35 @@ export class OperbotsApi {
     return this.call<T>('DELETE', path, { query });
   }
 
+  /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */
+  async text(path: string, query?: Query): Promise<string> {
+    const response = await this.request('GET', path, { query });
+    try {
+      return await parseText(response);
+    } catch (error) {
+      throw enrich(error);
+    }
+  }
+
   private async call<T>(method: string, path: string, options: CallOptions = {}): Promise<T> {
+    const response = await this.request(method, path, options);
+    try {
+      return await parse<T>(response);
+    } catch (error) {
+      throw enrich(error);
+    }
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    options: CallOptions = {},
+  ): Promise<Response> {
     const base = await this.auth.baseUrl();
     const token = await this.auth.token();
     const url = `${base}${API_PREFIX}${path}${buildQuery(options.query)}`;
 
-    const response = await send(url, {
+    return send(url, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -67,12 +90,6 @@ export class OperbotsApi {
       ...(options.body === undefined ? {} : { body: options.body }),
       timeoutMs: this.config.timeoutMs,
     });
-
-    try {
-      return await parse<T>(response);
-    } catch (error) {
-      throw enrich(error);
-    }
   }
 }
 
@@ -114,6 +131,12 @@ function buildQuery(query?: Query): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null || value === '') continue;
+    // Список уходит повторяющимся ключом: так панель принимает отбор
+    // сразу по нескольким значениям — ?kind=ai.reply&kind=ai.error.
+    if (Array.isArray(value)) {
+      for (const item of value) if (item !== '') params.append(key, item);
+      continue;
+    }
     params.append(key, String(value));
   }
   const text = params.toString();

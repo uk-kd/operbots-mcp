@@ -23,6 +23,14 @@ export interface Tool {
   description: string;
   input: z.ZodRawShape;
   kind: Kind;
+  /**
+   * Инструмент доступа: правит не данные панели, а сохранённый на этой
+   * машине токен. Режим «только чтение» такие не убирает — иначе совет
+   * «вызовите operbots_login», которым кончается любой отказ по доступу,
+   * вёл бы к инструменту, которого в списке нет, и выйти из тупика было
+   * бы нечем.
+   */
+  session?: boolean;
   run: (args: Record<string, unknown>, ctx: Context) => Promise<string>;
 }
 
@@ -33,6 +41,7 @@ export function tool<S extends z.ZodRawShape>(def: {
   description: string;
   input: S;
   kind: Kind;
+  session?: boolean;
   run: (args: z.infer<z.ZodObject<S>>, ctx: Context) => Promise<string>;
 }): Tool {
   return def as unknown as Tool;

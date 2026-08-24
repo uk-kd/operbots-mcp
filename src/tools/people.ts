@@ -68,7 +68,7 @@ async function findRole(ctx: Context, caseId: string, hint: string): Promise<Rol
   return match;
 }
 
-async function findMember(ctx: Context, caseId: string, hint: string): Promise<Member> {
+export async function findMember(ctx: Context, caseId: string, hint: string): Promise<Member> {
   const members = await ctx.api.get<Member[]>(`/cases/${caseId}/members`);
   const needle = hint.trim().toLowerCase();
 

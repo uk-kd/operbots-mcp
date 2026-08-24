@@ -1,14 +1,16 @@
 /**
- * Боты: подключение по токену, запуск, меню команд и переменные контента.
+ * Боты: подключение по токену, запуск, меню команд, переменные контента
+ * и журнал — что бот делал сам, пока никто не смотрел.
  */
 
 import { z } from 'zod';
 
+import type { Page } from '../api.js';
 import type { Context } from '../context.js';
 import { BOT_MODES } from '../enums.js';
 import { ApiError } from '../errors.js';
-import { MASK, report } from '../format.js';
-import { caseField, botField, body, optional, tool, type Tool } from './kit.js';
+import { MASK, pageFooter, report } from '../format.js';
+import { caseField, botField, body, limitField, optional, tool, type Tool } from './kit.js';
 
 interface Bot {
   id: string;
@@ -67,6 +69,27 @@ interface Provider {
   kind: string;
   model: string;
   is_active: boolean;
+}
+
+/** Запись журнала бота. */
+interface BotEvent {
+  id: string;
+  kind: string;
+  /** Название вида по-русски: «Ответ модели», «Запуск». */
+  title: string;
+  group: string;
+  level: string;
+  summary: string;
+  dialog_id: string | null;
+  meta: Record<string, unknown>;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+interface JournalFilters {
+  kinds: { kind: string; group: string; title: string; count: number }[];
+  levels: Record<string, number>;
+  total: number;
 }
 
 /** Карточка бота без секретов: адрес вебхука содержит рабочий ключ. */
@@ -252,6 +275,72 @@ export const botTools: Tool[] = [
                   узлов: item.nodes_count,
                   связей: item.edges_count,
                 })),
+      });
+    },
+  }),
+
+  tool({
+    name: 'bots_journal',
+    title: 'Журнал бота',
+    kind: 'read',
+    description:
+      'Что делал сам бот: запуски и остановки, входящие обновления, ответы модели и сколько ' +
+      'она думала, ожидание ответа по сценарию, отложенные действия, ошибки сценария и отказы ' +
+      'Telegram. Журнал дела (audit_list) пишет действия людей — этот пишет действия бота, ' +
+      'и на вопрос «почему бот молчит» отвечает именно он. Записи идут от свежих к старым; ' +
+      'сузить можно видом (kind) и уровнем — level=error оставит одни сбои. Какие виды у ' +
+      'этого бота вообще встречались и сколько их, перечислено в конце ответа. Журнал — ' +
+      'недавняя история, а не архив: старые записи панель убирает сама.',
+    input: {
+      case: caseField,
+      bot: botField,
+      kind: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Виды записей, например ai.error, flow.error, update.in, message.out. ' +
+            'Подходит любой из перечисленных.',
+        ),
+      level: z
+        .enum(['info', 'warn', 'error'])
+        .optional()
+        .describe('info — обычные записи, warn — предупреждения, error — сбои.'),
+      limit: limitField(200, 30),
+      offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const bot = await ctx.resolveBot(found.id, args.bot);
+      const root = `/cases/${found.id}/bots/${bot.id}/journal`;
+
+      const [page, filters] = await Promise.all([
+        ctx.api.get<Page<BotEvent>>(root, {
+          kind: args.kind,
+          level: args.level,
+          limit: args.limit,
+          offset: args.offset,
+        }),
+        optional(ctx.api.get<JournalFilters>(`${root}/filters`)),
+      ]);
+
+      return report(`Журнал бота «${bot.name}» — ${pageFooter(page)}`, {
+        записи: page.items.map((item) => ({
+          когда: item.created_at,
+          что: item.summary,
+          вид: `${item.title} (${item.kind})`,
+          // Обычные записи ничем не выделяются — уровень стоит показывать
+          // только там, где он о чём-то говорит.
+          уровень: item.level === 'info' ? undefined : item.level,
+          диалог: item.dialog_id,
+          заняло_мс: item.duration_ms,
+          подробности: item.meta,
+        })),
+        какие_виды_есть:
+          typeof filters === 'string'
+            ? filters
+            : filters.kinds.map(
+                (item) => `${item.kind} — ${item.title}, записей ${item.count}`,
+              ),
       });
     },
   }),
