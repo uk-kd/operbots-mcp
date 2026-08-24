@@ -32,9 +32,12 @@ export const PERMISSIONS = [
   'chat.view',
   'chat.reply',
   'chat.takeover',
+  'chat.broadcast',
   'chat.delete',
   'ai.view',
   'ai.manage',
+  'knowledge.view',
+  'knowledge.edit',
   'audit.view',
 ] as const;
 

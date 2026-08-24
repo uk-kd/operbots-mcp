@@ -237,11 +237,13 @@ export const caseTools: Tool[] = [
           'Вид события, например flow.update, bot.delete, role.update. Без него — все виды.',
         ),
       limit: limitField(200, 50),
+      offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const page = await ctx.api.get<Page<AuditEvent>>(`/cases/${found.id}/audit`, {
         limit: args.limit,
+        offset: args.offset,
         action: args.action,
       });
 

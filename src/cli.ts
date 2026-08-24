@@ -29,6 +29,7 @@ import {
   saveSettings,
   withCredentialsLock,
 } from './credentials.js';
+import { PERMISSIONS } from './enums.js';
 import { describeError } from './errors.js';
 import { selectTools } from './server.js';
 
@@ -517,7 +518,9 @@ export async function status(): Promise<number> {
     out(`Связь с панелью есть: ${user.display_name} <${user.email}>`);
     for (const item of cases) {
       const role = item.is_owner ? 'владелец' : (item.role_name ?? 'без роли');
-      out(`  ${item.emoji} ${item.name} — ${role}, прав ${item.permissions.length} из 27`);
+      out(
+        `  ${item.emoji} ${item.name} — ${role}, прав ${item.permissions.length} из ${PERMISSIONS.length}`,
+      );
     }
   } catch (error) {
     out(`Связи с панелью нет: ${describeError(error)}`);

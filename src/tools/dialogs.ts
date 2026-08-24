@@ -74,42 +74,93 @@ interface Task {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CHAT_ID = /^-?\d+$/;
+
+/** Сколько диалогов перебрать в поисках номера чата, прежде чем сдаться. */
+const CHAT_SCAN = 1000;
+
+/**
+ * Диалог по номеру чата.
+ *
+ * Панель по chat_id не ищет вовсе: её запрос смотрит в имя, ник,
+ * заголовок, текст сообщений и метки. Номер чата человек берёт из
+ * карточки диалога, поэтому страницы перебираем сами — иначе поиск по
+ * номеру, обещанный в описаниях, приводил бы к первому встречному.
+ */
+async function findByChatId(ctx: Context, caseId: string, chatId: string): Promise<Dialog | null> {
+  const step = 200;
+  for (let offset = 0; offset < CHAT_SCAN; offset += step) {
+    const page = await ctx.api.get<Page<Dialog>>(`/cases/${caseId}/dialogs`, {
+      limit: step,
+      offset,
+    });
+    const hit = page.items.find((item) => String(item.chat_id) === chatId);
+    if (hit) return hit;
+    if (page.items.length === 0 || offset + page.items.length >= page.total) break;
+  }
+  return null;
+}
 
 /** Ищет диалог по идентификатору, номеру чата, имени собеседника или @username. */
 async function findDialog(ctx: Context, caseId: string, hint: string): Promise<Dialog> {
   const wanted = hint.trim();
   if (UUID.test(wanted)) return ctx.api.get<Dialog>(`/cases/${caseId}/dialogs/${wanted}`);
 
+  if (CHAT_ID.test(wanted)) {
+    const byChat = await findByChatId(ctx, caseId, wanted);
+    if (byChat) return byChat;
+  }
+
+  const needle = wanted.replace(/^@/, '').toLowerCase();
+  const parts = needle.split(/\s+/).filter(Boolean);
+
+  // Панель ищет подстроку по каждому столбцу ПОРОЗНЬ: имя, фамилия,
+  // ник, заголовок, последняя реплика. Столбца «Имя Фамилия» у неё нет
+  // — это вычисляемое поле. Поэтому составное имя целиком не находится
+  // никогда, и спрашивать надо одной частью, а сверять — всеми: за
+  // самой длинной частью выдача уже, а лишнее отсеется здесь.
+  const самая_длинная = parts.reduce((a, b) => (b.length > a.length ? b : a), parts[0] ?? needle);
   const page = await ctx.api.get<Page<Dialog>>(`/cases/${caseId}/dialogs`, {
-    query: wanted.replace(/^@/, ''),
+    query: parts.length > 1 ? самая_длинная : needle,
     limit: 50,
   });
 
-  const needle = wanted.replace(/^@/, '').toLowerCase();
   const candidates = page.items;
-  const exact =
-    candidates.filter((item) => item.contact_name.toLowerCase() === needle) ??
-    [];
   const byHandle = candidates.filter((item) => item.username?.toLowerCase() === needle);
-  const byChat = candidates.filter((item) => String(item.chat_id) === wanted);
+  const byName = candidates.filter((item) => {
+    const name = item.contact_name.trim().toLowerCase();
+    if (name === needle) return true;
+    const слова = name.split(/\s+/);
+    return parts.length > 1
+      ? parts.every((part) => слова.includes(part))
+      : слова.includes(needle);
+  });
 
-  const narrowed =
-    byChat.length > 0 ? byChat : byHandle.length > 0 ? byHandle : exact.length > 0 ? exact : candidates;
-
+  const narrowed = byHandle.length > 0 ? byHandle : byName;
   if (narrowed.length === 1 && narrowed[0]) return narrowed[0];
-  if (narrowed.length === 0) {
+  if (candidates.length === 0) {
     throw new ApiError(404, 'dialog_not_found', `Диалога «${hint}» не нашлось.`);
   }
 
+  // Ни один точный отбор не дал ровно одну запись. Брать здесь первую
+  // строку текстового поиска нельзя: dialogs_reply отправлял бы
+  // сообщение постороннему человеку.
+  const shown = narrowed.length > 0 ? narrowed : candidates;
   throw new ApiError(
     400,
     'ambiguous',
-    `Под «${hint}» подходит несколько диалогов:\n` +
-      narrowed
+    (narrowed.length > 0
+      ? `Под «${hint}» подходит несколько диалогов:\n`
+      : `Точного совпадения с «${hint}» нет, похожи эти диалоги:\n`) +
+      shown
         .slice(0, 10)
-        .map((item) => `  ${item.contact_name} (${item.bot_name}) — ${item.id}`)
+        .map(
+          (item) =>
+            `  ${item.contact_name}${item.username ? ` @${item.username}` : ''} ` +
+            `(${item.bot_name}, чат ${item.chat_id}) — ${item.id}`,
+        )
         .join('\n') +
-      '\nУточните запрос или передайте идентификатор.',
+      '\nВыберите нужный и передайте его идентификатор, номер чата или @username.',
   );
 }
 
@@ -332,8 +383,10 @@ export const dialogTools: Tool[] = [
     title: 'Настроить диалог',
     kind: 'write',
     description:
-      'Меняет режим ведения (сценарий или оператор), отвечает ли ИИ, метки, закрепление ' +
-      'и блокировку. Перевод в режим bot возвращает разговор сценарию и снимает оператора.',
+      'Меняет режим ведения (сценарий или оператор), отвечает ли ИИ, метки и закрепление. ' +
+      'Перевод в режим bot возвращает разговор сценарию и снимает оператора. ' +
+      'Заблокировать собеседника отсюда нельзя: блокировку приносит Telegram, когда человек ' +
+      'сам закрывает боту рот, — панель её только показывает.',
     input: {
       case: caseField,
       dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
@@ -343,7 +396,6 @@ export const dialogTools: Tool[] = [
         .describe('bot — вернуть сценарию; operator — вести вручную.'),
       ai_enabled: z.boolean().optional().describe('Отвечает ли ИИ в этом диалоге.'),
       pinned: z.boolean().optional().describe('Закрепить наверху списка.'),
-      blocked: z.boolean().optional().describe('Заблокировать собеседника.'),
       tags: z.array(z.string()).optional().describe('Метки. Заменяют прежние целиком.'),
     },
     async run(args, ctx) {
@@ -354,7 +406,6 @@ export const dialogTools: Tool[] = [
         mode: args.mode,
         is_ai_enabled: args.ai_enabled,
         is_pinned: args.pinned,
-        is_blocked: args.blocked,
         tags: args.tags,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
@@ -373,7 +424,8 @@ export const dialogTools: Tool[] = [
     kind: 'danger',
     description:
       'Удаляет диалог вместе со всей перепиской. Восстановить нельзя. ' +
-      'Чтобы просто перестать получать сообщения, используйте dialogs_update blocked=true.',
+      'Чтобы бот просто перестал отвечать этому человеку, переведите разговор в ручной режим: ' +
+      'dialogs_update mode=operator, ai_enabled=false — переписка при этом останется.',
     input: {
       case: caseField,
       dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
@@ -400,23 +452,43 @@ export const dialogTools: Tool[] = [
     kind: 'read',
     description:
       'Что запланировано в деле: «написать через три дня», «напомнить, если не ответил». ' +
-      'Показывает и выполненные, и отменённые — отбирайте по статусу.',
+      'Показывает и выполненные, и отменённые: выполненные задачи не удаляются, а порядок — ' +
+      'по сроку с самых ранних, так что без status ответ занимает давняя история. ' +
+      'Что ещё предстоит, спрашивайте с status=pending: отбор делает панель. ' +
+      'Больше 300 записей за раз панель не отдаёт, и общего их числа не сообщает.',
     input: {
       case: caseField,
       status: z
         .enum(['pending', 'running', 'done', 'failed', 'cancelled'])
         .optional()
-        .describe('Оставить только задачи в этом состоянии.'),
+        .describe('Оставить только задачи в этом состоянии. Отбирает панель, в самом запросе.'),
       limit: limitField(300, 100),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
-      const list = await ctx.api.get<Task[]>(`/cases/${found.id}/tasks`, { limit: args.limit });
-      const filtered = args.status ? list.filter((item) => item.status === args.status) : list;
+      const limit = args.limit ?? 100;
+      const list = await ctx.api.get<Task[]>(`/cases/${found.id}/tasks`, {
+        limit,
+        status: args.status,
+      });
+      // Панель отдаёт первые limit записей по сроку и общего числа не
+      // сообщает. Полный кусок — повод сказать, что дальше не видно:
+      // иначе «действий: 100» читалось бы как вся очередь. Утверждать
+      // «их больше» нельзя — записей могло оказаться ровно limit.
+      const clipped = list.length >= limit;
+      const потолок = limit >= 300;
 
       return report(
-        `Отложенных действий: ${filtered.length}` + (args.status ? ` в состоянии «${args.status}»` : ''),
-        filtered.map((item) => ({
+        `Отложенных действий${args.status ? ` в состоянии «${args.status}»` : ''}: ` +
+          `${list.length}` +
+          (clipped
+            ? `. Это первые ${limit} по сроку, начиная с самых ранних; есть ли за ними ещё — ` +
+              'панель не сообщает' +
+              (потолок
+                ? '. Больше 300 за раз она не отдаёт, поэтому сузьте отбор через status'
+                : ', за следующими поднимите limit (потолок 300)')
+            : ''),
+        list.map((item) => ({
           идентификатор: item.id,
           диалог: item.dialog_name || item.dialog_id,
           узел: item.node_id,

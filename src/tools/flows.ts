@@ -12,7 +12,10 @@
 import { z } from 'zod';
 
 import { FLOW_TEMPLATES, NODE_KINDS } from '../enums.js';
-import { report } from '../format.js';
+import { ApiError } from '../errors.js';
+import { MASK, raw, report } from '../format.js';
+import { findProvider } from './bots.js';
+import { findBase } from './knowledge.js';
 import { caseField, botField, body, tool, type Tool } from './kit.js';
 
 interface RawNode {
@@ -107,7 +110,11 @@ const edgeInput = z.object({
   out: z
     .string()
     .optional()
-    .describe('Выход узла-источника, если их несколько: например «да» или «нет».'),
+    .describe(
+      'Выход узла-источника, если их несколько. Названия латиницей и зависят от вида узла: ' +
+        'у условия true и false, у запроса ok и error, у меню — номера кнопок. ' +
+        'Полный перечень — в operbots_catalog what=node_kinds, поле «выходы». По умолчанию out.',
+    ),
   label: z.string().optional().describe('Подпись на связи.'),
 });
 
@@ -121,8 +128,13 @@ function flatten(graph: RawGraph) {
       id: node.id,
       kind: node.data?.kind ?? 'неизвестно',
       title: node.data?.title || undefined,
+      // Настройки уходят дословно: маска вывода превратила бы ключ
+      // сервиса в «···1234», и следующий flows_save записал бы её в
+      // сценарий вместо ключа.
       config:
-        node.data?.config && Object.keys(node.data.config).length > 0 ? node.data.config : undefined,
+        node.data?.config && Object.keys(node.data.config).length > 0
+          ? raw(node.data.config)
+          : undefined,
       x: node.position?.x ?? 0,
       y: node.position?.y ?? 0,
     })),
@@ -137,6 +149,45 @@ function flatten(graph: RawGraph) {
 }
 
 /**
+ * Отказывает, если в настройки узла попало замаскированное значение.
+ *
+ * Круг flows_get → flows_save модель делает по прямому указанию
+ * сервера. Стоит маске просочиться в config — и ключ сервиса в
+ * сценарии заменится на «···1234», а бот замолчит без всякой ошибки.
+ */
+function refuseMasked(nodes: NodeInput[]): void {
+  const spoiled: string[] = [];
+
+  const walk = (node: string, path: string, value: unknown): void => {
+    if (typeof value === 'string') {
+      if (value.startsWith(MASK)) spoiled.push(`${node}.${path}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walk(node, `${path}[${index}]`, item));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const [key, item] of Object.entries(value)) walk(node, `${path}.${key}`, item);
+    }
+  };
+
+  for (const node of nodes) {
+    for (const [key, value] of Object.entries(node.config ?? {})) walk(node.id, key, value);
+  }
+
+  if (spoiled.length > 0) {
+    throw new ApiError(
+      400,
+      'masked_value',
+      `Не сохраняю: в настройках узлов стоят замаскированные значения (${spoiled.join(', ')}). ` +
+        `«${MASK}» — это то, чем вывод прикрывает секрет, а не сам секрет. ` +
+        'Впишите настоящее значение.',
+    );
+  }
+}
+
+/**
  * Собирает граф в формате полотна. Размеры узлов, положение карты и всё
  * оформление — цвет узла, цвет и вид связи — берутся из текущей редакции:
  * панель их рисует, а модель о них не знает и прислать не может. Поэтому
@@ -144,6 +195,7 @@ function flatten(graph: RawGraph) {
  * модель распоряжается: вид узла, подпись и настройки.
  */
 function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): RawGraph {
+  refuseMasked(nodes);
   const sizes = new Map((previous?.nodes ?? []).map((node) => [node.id, node]));
   const before = new Map((previous?.edges ?? []).map((edge) => [edge.id, edge]));
 
@@ -314,6 +366,9 @@ export const flowTools: Tool[] = [
       'С параметром flow перезаписывает его. Граф передаётся ЦЕЛИКОМ: чтобы поправить один узел, ' +
       'сначала прочитайте сценарий через flows_get и пришлите изменённый список полностью. ' +
       'Новая редакция создаётся, только если граф действительно изменился. ' +
+      'Заготовке с узлами «Ответ ИИ» нужны provider и knowledge_base — без них сценарий ' +
+      'отвечает пустотой; чего требует каждая заготовка, видно в operbots_catalog ' +
+      'what=flow_templates, поле «нужно». ' +
       'Сохранение не включает сценарий в работу — для этого есть flows_publish.',
     input: {
       case: caseField,
@@ -326,12 +381,26 @@ export const flowTools: Tool[] = [
         .enum(FLOW_TEMPLATES)
         .optional()
         .describe('Заготовка стартового графа. Учитывается только при создании и без nodes.'),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          'Подключение к ИИ для узлов «Ответ ИИ» из заготовки: название или идентификатор. ' +
+            'Учитывается только при создании из заготовки.',
+        ),
+      knowledge_base: z
+        .string()
+        .optional()
+        .describe(
+          'База знаний для узлов «Ответ ИИ» из заготовки: название или идентификатор. ' +
+            'Без неё консультант отвечает «из головы». Учитывается только при создании из заготовки.',
+        ),
       nodes: z.array(nodeInput).optional().describe('Узлы сценария целиком.'),
       edges: z.array(edgeInput).optional().describe('Связи между узлами целиком.'),
       comment: z.string().max(240).optional().describe('Комментарий к редакции.'),
     },
     async run(args, ctx) {
-      const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
+      const { found, root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
 
       if (args.copy_of && !args.flow) {
         const source = await locate(ctx, args.case, args.bot, args.copy_of);
@@ -349,6 +418,17 @@ export const flowTools: Tool[] = [
       if (!flowId) {
         if (!args.name) return 'Чтобы создать сценарий, нужно название.';
         const graph = args.nodes ? build(args.nodes, args.edges ?? []) : undefined;
+        // Подключения панель подставляет в узлы заготовки: со своим
+        // графом их и не ждут — там всё уже расписано. Потому и ищем
+        // их только здесь: иначе свой граф падал бы «подключение не
+        // найдено» из-за поля, которое всё равно не отправится, а в
+        // отчёте стояло бы подключение, о котором панель не знает.
+        const provider =
+          !graph && args.provider ? await findProvider(ctx, found.id, args.provider) : null;
+        const base =
+          !graph && args.knowledge_base
+            ? await findBase(ctx, found.id, args.knowledge_base)
+            : null;
         const created = await ctx.api.post<Flow>(
           root,
           body({
@@ -356,11 +436,19 @@ export const flowTools: Tool[] = [
             description: args.description,
             graph,
             template: graph ? undefined : (args.template ?? 'blank'),
+            provider_id: provider?.id,
+            knowledge_base_id: base?.id,
           }),
         );
         return report(
-          created.is_active ? 'Сценарий создан и сразу включён в работу — он первый у бота.' : 'Сценарий создан.',
-          showFlow(created, false),
+          created.is_active
+            ? 'Сценарий создан и сразу включён в работу — он первый у бота.'
+            : 'Сценарий создан.',
+          {
+            ...showFlow(created, false),
+            подключение_ии: provider?.name,
+            база_знаний: base?.name,
+          },
         );
       }
 
@@ -377,7 +465,9 @@ export const flowTools: Tool[] = [
       const saved = await ctx.api.put<Flow>(`${root}/${flowId}`, payload);
       const grew = saved.version > current.version;
       return report(
-        grew ? `Сохранено, редакция №${saved.version}.` : 'Сохранено; граф не изменился, новая редакция не создавалась.',
+        grew
+          ? `Сохранено, редакция №${saved.version}.`
+          : 'Сохранено; граф не изменился, новая редакция не создавалась.',
         showFlow(saved, false),
       );
     },
@@ -519,8 +609,8 @@ export const flowTools: Tool[] = [
     kind: 'read',
     description:
       'Отдаёт сценарий одним объектом формата operbots.flow — тем же, что панель скачивает ' +
-      'кнопкой «Скачать». Годится, чтобы сохранить копию рядом с кодом или перенести схему ' +
-      'в другое дело через flows_import.',
+      'кнопкой «Скачать». Ответ приходит готовым JSON: его целиком передают в flows_import ' +
+      'полем document или сохраняют копию рядом с кодом.',
     input: {
       case: caseField,
       bot: botField,
@@ -529,7 +619,9 @@ export const flowTools: Tool[] = [
     async run(args, ctx) {
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
       const document = await ctx.api.get<FlowDocument>(`${root}/${flowId}/export`);
-      return report(`Выгрузка сценария «${document.name}»`, document);
+      // Дословно: пересказанную карточку обратно в flows_import не
+      // передашь, а связка export → import ради этого и заведена.
+      return report(`Выгрузка сценария «${document.name}» — целиком для flows_import:`, raw(document));
     },
   }),
 

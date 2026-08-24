@@ -100,8 +100,9 @@ function enrich(error: unknown): unknown {
     return new ApiError(
       error.status,
       error.code,
-      'Учётная запись не прошла шаг знакомства: откройте панель и заполните ФИО и дату рождения. ' +
-        'До этого API закрыт целиком.',
+      'Учётная запись не прошла шаг знакомства: нужны фамилия, имя и дата рождения. ' +
+        'До этого API закрыт целиком. Заполнить можно отсюда: ' +
+        'account_update last_name, first_name, birth_date (ГГГГ-ММ-ДД).',
       error.details,
     );
   }
