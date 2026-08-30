@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 import type { Page } from '../api.js';
 import type { Context } from '../context.js';
-import { BOT_MODES } from '../enums.js';
+import { BOT_MODES, BOT_PLATFORMS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { MASK, pageFooter, report } from '../format.js';
 import { caseField, botField, body, limitField, optional, tool, type Tool } from './kit.js';
@@ -16,6 +16,8 @@ interface Bot {
   id: string;
   name: string;
   username: string | null;
+  /** Куда подключён бот: telegram или max. */
+  platform: string;
   description: string | null;
   mode: string;
   status: string;
@@ -97,7 +99,8 @@ function showBot(bot: Bot, full = false) {
   return {
     бот: bot.name,
     идентификатор: bot.id,
-    имя_в_telegram: bot.username ? `@${bot.username}` : null,
+    платформа: bot.platform,
+    имя_у_платформы: bot.username ? `@${bot.username}` : null,
     состояние: bot.status,
     сообщение: bot.status_message,
     включён: bot.is_enabled,
@@ -123,10 +126,12 @@ const WEBHOOK_URL = /https?:\/\/\S+?(?=[.,;:!?»)]*(?:\s|$))/g;
 
 /**
  * Прячет секретную часть адреса вебхука так же, как журнал панели:
- * скрыт только хвост пути после /tg/, всё остальное на месте.
+ * скрыт только хвост пути после последней косой черты, всё остальное
+ * на месте. Путь при этом не важен: у ботов, поднятых до общего
+ * маршрута, адрес вида /tg/{ключ}, у новых — /hook/{ключ}.
  *
  * В этом хвосте лежит рабочий ключ бота: кто его знает, шлёт боту
- * обновления мимо Telegram. Ради утечки такого адреса и заведён
+ * обновления мимо платформы. Ради утечки такого адреса и заведён
  * bots_webhook_rotate — печатать его в ответ читающего инструмента
  * значит раздавать то, от чего он спасает. А хост и последние знаки
  * ключа оставляем: по ним видно, куда именно ушёл вебхук.
@@ -286,7 +291,7 @@ export const botTools: Tool[] = [
     description:
       'Что делал сам бот: запуски и остановки, входящие обновления, ответы модели и сколько ' +
       'она думала, ожидание ответа по сценарию, отложенные действия, ошибки сценария и отказы ' +
-      'Telegram. Журнал дела (audit_list) пишет действия людей — этот пишет действия бота, ' +
+      'платформой. Журнал дела (audit_list) пишет действия людей — этот пишет действия бота, ' +
       'и на вопрос «почему бот молчит» отвечает именно он. Записи идут от свежих к старым; ' +
       'сузить можно видом (kind) и уровнем — level=error оставит одни сбои. Какие виды у ' +
       'этого бота вообще встречались и сколько их, перечислено в конце ответа. Журнал — ' +
@@ -350,9 +355,10 @@ export const botTools: Tool[] = [
     title: 'Подключить или настроить бота',
     kind: 'write',
     description:
-      'Без параметра bot подключает нового бота по токену от @BotFather — токен проверяется ' +
-      'живым запросом к Telegram и хранится зашифрованным. С параметром bot меняет настройки. ' +
-      'Смена токена или режима перезапускает работающего бота.',
+      'Без параметра bot подключает нового бота по токену — токен проверяется живым запросом ' +
+      'к платформе и хранится зашифрованным. С параметром bot меняет настройки. Смена токена ' +
+      'или режима перезапускает работающего бота. Платформу у подключённого бота сменить ' +
+      'нельзя: у неё свой вид токена и свои пределы.',
     input: {
       case: caseField,
       bot: z.string().optional().describe('Какого бота менять. Не указывайте, чтобы подключить нового.'),
@@ -360,13 +366,23 @@ export const botTools: Tool[] = [
       token: z
         .string()
         .optional()
-        .describe('Токен от @BotFather вида 1234567890:AA… Обязателен при подключении.'),
+        .describe(
+          'Токен бота. Обязателен при подключении. Вид у каждой платформы свой: у Telegram ' +
+            '1234567890:AA… от @BotFather, у MAX — длинная строка без двоеточия из кабинета ' +
+            'разработчика. Точный вид и где его брать — operbots_catalog what=platforms.',
+        ),
+      platform: z
+        .enum(BOT_PLATFORMS)
+        .optional()
+        .describe(
+          'Куда подключаем нового бота. По умолчанию telegram. У подключённого не меняется.',
+        ),
       description: z.string().max(2000).optional().describe('Описание бота.'),
       mode: z
         .enum(BOT_MODES)
         .optional()
         .describe(
-          'polling — панель сама забирает обновления; webhook — Telegram шлёт их на панель ' +
+          'polling — панель сама забирает обновления; webhook — платформа шлёт их на панель ' +
             '(нужен публичный адрес по https).',
         ),
       autostart: z.boolean().optional().describe('Запускать бота при старте панели.'),
@@ -389,13 +405,17 @@ export const botTools: Tool[] = [
 
       if (!args.bot) {
         if (!args.name || !args.token) {
-          return 'Чтобы подключить бота, нужны название и токен от @BotFather.';
+          return (
+            'Чтобы подключить бота, нужны название и токен. Какой токен нужен этой платформе ' +
+            'и где его взять — operbots_catalog what=platforms.'
+          );
         }
         const created = await ctx.api.post<Bot>(
           `/cases/${found.id}/bots`,
           body({
             name: args.name,
             token: args.token,
+            platform: args.platform,
             description: args.description,
             mode: args.mode,
             autostart: args.autostart,
@@ -439,7 +459,7 @@ export const botTools: Tool[] = [
     kind: 'write',
     description:
       'Запускает, останавливает или перезапускает бота, а также отправляет меню команд ' +
-      'в Telegram. Запуск сам синхронизирует меню; отдельная синхронизация нужна после ' +
+      'у платформы. Запуск сам синхронизирует меню; отдельная синхронизация нужна после ' +
       'правки команд у уже работающего бота.',
     input: {
       case: caseField,
@@ -476,7 +496,7 @@ export const botTools: Tool[] = [
       'Приводит меню команд бота к переданному списку: недостающие команды добавляет, ' +
       'существующие обновляет, порядок расставляет по порядку в списке. Команды, которых ' +
       'нет в списке, сохраняются — чтобы удалить их, передайте remove_missing=true. ' +
-      'Само меню в Telegram обновляется, только если sync=true или бот перезапущен.',
+      'Само меню у платформы обновляется, только если sync=true или бот перезапущен.',
     input: {
       case: caseField,
       bot: botField,
@@ -488,7 +508,7 @@ export const botTools: Tool[] = [
               .min(1)
               .max(32)
               .describe('Имя команды без косой черты: латиница, цифры, подчёркивание.'),
-            description: z.string().max(256).optional().describe('Пояснение в меню Telegram.'),
+            description: z.string().max(256).optional().describe('Пояснение в меню бота.'),
             visible: z.boolean().optional().describe('Показывать в меню. По умолчанию да.'),
             flow: z.string().optional().describe('Сценарий, который запускает команда.'),
             node_id: z.string().optional().describe('Узел сценария, с которого начать.'),
@@ -499,7 +519,7 @@ export const botTools: Tool[] = [
         .boolean()
         .optional()
         .describe('Удалить команды бота, которых нет в списке. По умолчанию нет.'),
-      sync: z.boolean().optional().describe('Сразу отправить меню в Telegram. По умолчанию да.'),
+      sync: z.boolean().optional().describe('Сразу отправить меню платформе. По умолчанию да.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -662,7 +682,7 @@ export const botTools: Tool[] = [
     title: 'Показать токен бота',
     kind: 'danger',
     description:
-      'Возвращает токен Telegram в открытом виде. Токен даёт полное управление ботом — ' +
+      'Возвращает токен бота в открытом виде. Токен даёт полное управление ботом — ' +
       'запрашивайте его, только если пользователь прямо об этом попросил, и не пересказывайте ' +
       'без надобности.',
     input: { case: caseField, bot: botField },
@@ -672,19 +692,19 @@ export const botTools: Tool[] = [
       const result = await ctx.api.get<{ token: string }>(
         `/cases/${found.id}/bots/${bot.id}/token`,
       );
-      return `Токен бота «${bot.name}»:\n${result.token}\n\nЕсли он попал не туда, смените его у @BotFather.`;
+      return `Токен бота «${bot.name}»:\n${result.token}\n\nЕсли он попал не туда, смените его у платформы — где именно, скажет operbots_catalog what=platforms.`;
     },
   }),
 
   tool({
     name: 'bots_webhook_check',
-    title: 'Что Telegram знает о вебхуке',
+    title: 'Что платформа знает о вебхуке',
     kind: 'read',
     description:
-      'Отчёт самого Telegram: на какой адрес он шлёт обновления, сколько их ждёт доставки и ' +
+      'Отчёт самой платформы: на какой адрес она шлёт обновления, сколько их ждёт доставки и ' +
       'какой была последняя ошибка доставки. Единственный способ понять, почему бот в режиме ' +
       'вебхука молчит: со стороны панели всё бывает исправно — адрес публичный, запрос доходит, — ' +
-      'а Telegram не достучался и знает причину. Ни токен, ни секретный ключ из адреса наружу ' +
+      'а платформа не достучалась и знает причину. Ни токен, ни ключ из адреса наружу ' +
       'не отдаются: адрес показан без ключа, а вывод прямо говорит, тот ли это адрес, ' +
       'которого ждёт панель.',
     input: { case: caseField, bot: botField },

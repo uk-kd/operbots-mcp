@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 
+import { BOT_PLATFORMS } from '../enums.js';
 import { report } from '../format.js';
 import { tool, type Tool } from './kit.js';
 
@@ -42,6 +43,26 @@ interface AIKind {
   requires_base_url: boolean;
 }
 
+interface Platform {
+  slug: string;
+  title: string;
+  capabilities: string[];
+  media_kinds: string[];
+  parse_modes: string[];
+  limits: {
+    text: number;
+    caption: number;
+    upload: number;
+    button_value: number;
+    /** Чем меряется значение кнопки: у Telegram байты, у MAX знаки. */
+    button_value_unit: 'bytes' | 'chars';
+    buttons_per_row: number;
+    button_rows: number;
+  };
+  token_hint: string;
+  token_where: string;
+}
+
 interface PermissionInfo {
   key: string;
   group: string;
@@ -56,23 +77,59 @@ export const catalogTools: Tool[] = [
     title: 'Справочники панели',
     kind: 'read',
     description:
-      'Что можно использовать при сборке: виды узлов сценария с полным составом их настроек, ' +
-      'заготовки сценариев, виды ИИ-сервисов с нужными ключами и каталог прав. ' +
-      'Смотрите node_kinds перед тем, как собирать или править сценарий: config каждого узла ' +
-      'описан именно там.',
+      'Что можно использовать при сборке: платформы с их пределами, виды узлов сценария с ' +
+      'полным составом их настроек, заготовки сценариев, виды ИИ-сервисов с нужными ключами ' +
+      'и каталог прав. Смотрите node_kinds перед тем, как собирать или править сценарий: ' +
+      'config каждого узла описан именно там — и передавайте platform: сами узлы у платформ ' +
+      'одни и те же, а варианты в их настройках разные (у MAX нет разметки MarkdownV2 и ' +
+      'голосового среди вложений).',
     input: {
       what: z
-        .enum(['node_kinds', 'flow_templates', 'ai_kinds', 'permissions'])
+        .enum(['platforms', 'node_kinds', 'flow_templates', 'ai_kinds', 'permissions'])
         .describe('Какой справочник показать.'),
       kind: z
         .string()
         .optional()
         .describe('Показать подробно только один вид: например action.ai или openai.'),
+      platform: z
+        .enum(BOT_PLATFORMS)
+        .optional()
+        .describe(
+          'Для node_kinds: под какую платформу отобрать варианты настроек. Без него ' +
+            'придёт полный набор, и сценарий можно собрать с вариантом, которого у ' +
+            'платформы бота нет.',
+        ),
     },
     async run(args, ctx) {
       switch (args.what) {
+        case 'platforms': {
+          const list = await ctx.api.get<Platform[]>('/platforms');
+          return report(
+            `Платформ: ${list.length}`,
+            list.map((item) => ({
+              платформа: item.slug,
+              название: item.title,
+              токен: `${item.token_hint} — ${item.token_where}`,
+              умеет: item.capabilities,
+              вложения: item.media_kinds,
+              разметка: item.parse_modes,
+              предел_текста: item.limits.text,
+              предел_подписи: item.limits.caption,
+              предел_файла: `${Math.round(item.limits.upload / (1024 * 1024))} МБ`,
+              значение_кнопки:
+                `${item.limits.button_value} ` +
+                (item.limits.button_value_unit === 'bytes' ? 'байт' : 'знаков'),
+              кнопок_в_ряду: item.limits.buttons_per_row,
+              рядов_кнопок: item.limits.button_rows,
+            })),
+          );
+        }
+
         case 'node_kinds': {
-          const list = await ctx.api.get<NodeType[]>('/flow-nodes');
+          const list = await ctx.api.get<NodeType[]>(
+            '/flow-nodes',
+            args.platform ? { platform: args.platform } : undefined,
+          );
           const wanted = args.kind
             ? list.filter((item) => item.kind === args.kind || item.kind.includes(args.kind ?? ''))
             : list;

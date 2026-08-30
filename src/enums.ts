@@ -97,6 +97,16 @@ export const AI_KINDS = ['gigachat', 'yandexgpt', 'openai', 'openrouter', 'custo
 /** Роли-пресеты, создаваемые в каждом новом деле. */
 export const ROLE_PRESETS = ['owner', 'admin', 'builder', 'operator', 'observer'] as const;
 
+/**
+ * `app/models/bot.py` — BotPlatform: во что панель умеет подключать бота.
+ *
+ * Список тот же, что отдаёт `GET /platforms`, и совпадение сторожит
+ * проверка панели (`scripts/checks/platform_registry.py`). Пределы,
+ * возможности и вид токена у каждой свои — за ними идите в
+ * `operbots_catalog what=platforms`, а не гадайте по имени.
+ */
+export const BOT_PLATFORMS = ['telegram', 'max'] as const;
+
 export const BOT_MODES = ['polling', 'webhook'] as const;
 export const DIALOG_MODES = ['bot', 'operator'] as const;
 export const THEME_MODES = ['light', 'dark', 'auto'] as const;
