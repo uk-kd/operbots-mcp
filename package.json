@@ -1,6 +1,6 @@
 {
   "name": "operbots-mcp",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "MCP-сервер панели operbots: дела, боты Telegram и MAX, сценарии, диалоги и база знаний из Claude Code",
   "keywords": [
     "mcp",
