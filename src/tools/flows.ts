@@ -11,11 +11,9 @@
 
 import { z } from 'zod';
 
-import { FLOW_TEMPLATES, NODE_KINDS } from '../enums.js';
+import { NODE_KINDS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { MASK, raw, report } from '../format.js';
-import { findProvider } from './bots.js';
-import { findBase } from './knowledge.js';
 import { caseField, botField, body, tool, type Tool } from './kit.js';
 
 interface RawNode {
@@ -49,7 +47,16 @@ interface RawGraph {
   viewport?: { x: number; y: number; zoom: number };
 }
 
-interface Flow {
+/** Чем сценарий связан с маркетом: его выложили или из него поставили. */
+export interface MarketLink {
+  item_id: string;
+  role: 'source' | 'installed';
+  title: string;
+  version: number;
+  latest_version: number;
+}
+
+export interface Flow {
   id: string;
   bot_id: string;
   name: string;
@@ -60,6 +67,7 @@ interface Flow {
   published_at: string | null;
   updated_at: string;
   problems: string[];
+  market?: MarketLink | null;
 }
 
 interface FlowBrief {
@@ -73,6 +81,7 @@ interface FlowBrief {
   edges_count: number;
   problems_count: number;
   updated_at: string;
+  market?: MarketLink | null;
 }
 
 /** Файл выгрузки сценария: то, что панель скачивает и читает обратно. */
@@ -241,7 +250,18 @@ function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): Raw
   };
 }
 
-function showFlow(flow: Flow, withGraph: boolean) {
+/** Связь с маркетом одной строкой: «выложен, версия 2» или «установлен, есть версия 3». */
+export function marketNote(link: MarketLink | null | undefined): string | undefined {
+  if (!link) return undefined;
+  if (link.role === 'source') return `выложен в маркет как «${link.title}», версия ${link.version}`;
+  const fresh =
+    link.latest_version > link.version
+      ? `, в маркете уже версия ${link.latest_version} — обновить можно market_install`
+      : '';
+  return `установлен из маркета «${link.title}», версия ${link.version}${fresh}`;
+}
+
+export function showFlow(flow: Flow, withGraph: boolean) {
   const flat = flatten(flow.graph);
   return {
     сценарий: flow.name,
@@ -253,12 +273,13 @@ function showFlow(flow: Flow, withGraph: boolean) {
     связей: flat.edges.length,
     изменён: flow.updated_at,
     замечания: flow.problems.length > 0 ? flow.problems : undefined,
+    маркет: marketNote(flow.market),
     узлы: withGraph ? flat.nodes : undefined,
     связи: withGraph ? flat.edges : undefined,
   };
 }
 
-async function locate(
+export async function locate(
   ctx: Parameters<Tool['run']>[1],
   caseHint: string | undefined,
   botHint: string,
@@ -315,6 +336,7 @@ export const flowTools: Tool[] = [
             узлов: item.nodes_count,
             связей: item.edges_count,
             замечаний: item.problems_count || undefined,
+            маркет: marketNote(item.market),
             изменён: item.updated_at,
           })),
         );
@@ -332,6 +354,8 @@ export const flowTools: Tool[] = [
           редакция: item.version,
           узлов: item.nodes_count,
           связей: item.edges_count,
+          замечаний: item.problems_count || undefined,
+          маркет: marketNote(item.market),
           изменён: item.updated_at,
         })),
       );
@@ -362,93 +386,63 @@ export const flowTools: Tool[] = [
     title: 'Создать или сохранить сценарий',
     kind: 'write',
     description:
-      'Без параметра flow создаёт сценарий — из заготовки (template) или из переданного графа. ' +
-      'С параметром flow перезаписывает его. Граф передаётся ЦЕЛИКОМ: чтобы поправить один узел, ' +
-      'сначала прочитайте сценарий через flows_get и пришлите изменённый список полностью. ' +
-      'Новая редакция создаётся, только если граф действительно изменился. ' +
-      'Заготовке с узлами «Ответ ИИ» нужны provider и knowledge_base — без них сценарий ' +
-      'отвечает пустотой; чего требует каждая заготовка, видно в operbots_catalog ' +
-      'what=flow_templates, поле «нужно». ' +
+      'Без параметра flow создаёт сценарий — пустой, из переданного графа или копией другого ' +
+      '(copy_of). С параметром flow перезаписывает его. Граф передаётся ЦЕЛИКОМ: чтобы ' +
+      'поправить один узел, сначала прочитайте сценарий через flows_get и пришлите изменённый ' +
+      'список полностью. Новая редакция создаётся, только если граф действительно изменился. ' +
+      'Готовые сценарии — «Консультант с ИИ», «Заявка», «Запись на визит» и другие — здесь не ' +
+      'создаются: их ставят из маркета через market_install. ' +
       'Сохранение не включает сценарий в работу — для этого есть flows_publish.',
     input: {
       case: caseField,
       bot: botField,
       flow: z.string().optional().describe('Какой сценарий перезаписать. Не указывайте для нового.'),
-      copy_of: z.string().optional().describe('Скопировать существующий сценарий вместо создания пустого.'),
+      copy_of: z
+        .string()
+        .optional()
+        .describe(
+          'Скопировать существующий сценарий вместо создания пустого. Название копии — в name; ' +
+            'без него будет «… — копия».',
+        ),
       name: z.string().min(1).max(120).optional().describe('Название сценария.'),
       description: z.string().max(2000).optional().describe('Описание.'),
-      template: z
-        .enum(FLOW_TEMPLATES)
-        .optional()
-        .describe('Заготовка стартового графа. Учитывается только при создании и без nodes.'),
-      provider: z
-        .string()
-        .optional()
-        .describe(
-          'Подключение к ИИ для узлов «Ответ ИИ» из заготовки: название или идентификатор. ' +
-            'Учитывается только при создании из заготовки.',
-        ),
-      knowledge_base: z
-        .string()
-        .optional()
-        .describe(
-          'База знаний для узлов «Ответ ИИ» из заготовки: название или идентификатор. ' +
-            'Без неё консультант отвечает «из головы». Учитывается только при создании из заготовки.',
-        ),
       nodes: z.array(nodeInput).optional().describe('Узлы сценария целиком.'),
       edges: z.array(edgeInput).optional().describe('Связи между узлами целиком.'),
       comment: z.string().max(240).optional().describe('Комментарий к редакции.'),
     },
     async run(args, ctx) {
-      const { found, root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
+      const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
 
       if (args.copy_of && !args.flow) {
         const source = await locate(ctx, args.case, args.bot, args.copy_of);
-        const copy = await ctx.api.post<Flow>(`${source.root}/${source.flowId}/duplicate`);
-        const renamed =
-          args.name || args.description
-            ? await ctx.api.put<Flow>(`${root}/${copy.id}`, body({
-                name: args.name,
-                description: args.description,
-              }))
-            : copy;
+        // Имя копии панель принимает сразу: «… — копия — копия» после
+        // второго раза никому не помогало.
+        const copy = await ctx.api.post<Flow>(
+          `${source.root}/${source.flowId}/duplicate`,
+          body({ name: args.name }),
+        );
+        const renamed = args.description
+          ? await ctx.api.put<Flow>(`${root}/${copy.id}`, body({ description: args.description }))
+          : copy;
         return report('Сценарий скопирован.', showFlow(renamed, false));
       }
 
       if (!flowId) {
         if (!args.name) return 'Чтобы создать сценарий, нужно название.';
         const graph = args.nodes ? build(args.nodes, args.edges ?? []) : undefined;
-        // Подключения панель подставляет в узлы заготовки: со своим
-        // графом их и не ждут — там всё уже расписано. Потому и ищем
-        // их только здесь: иначе свой граф падал бы «подключение не
-        // найдено» из-за поля, которое всё равно не отправится, а в
-        // отчёте стояло бы подключение, о котором панель не знает.
-        const provider =
-          !graph && args.provider ? await findProvider(ctx, found.id, args.provider) : null;
-        const base =
-          !graph && args.knowledge_base
-            ? await findBase(ctx, found.id, args.knowledge_base)
-            : null;
         const created = await ctx.api.post<Flow>(
           root,
           body({
             name: args.name,
             description: args.description,
             graph,
-            template: graph ? undefined : (args.template ?? 'blank'),
-            provider_id: provider?.id,
-            knowledge_base_id: base?.id,
           }),
         );
         return report(
           created.is_active
             ? 'Сценарий создан и сразу включён в работу — он первый у бота.'
             : 'Сценарий создан.',
-          {
-            ...showFlow(created, false),
-            подключение_ии: provider?.name,
-            база_знаний: base?.name,
-          },
+          showFlow(created, false),
         );
       }
 
@@ -671,7 +665,8 @@ export const flowTools: Tool[] = [
     kind: 'danger',
     description:
       'Удаляет сценарий вместе со всей историей редакций. Восстановить нельзя. ' +
-      'Если удалить работающий сценарий, бот останется без полотна.',
+      'Если удалить работающий сценарий, бот останется без полотна. Публикация в маркете, ' +
+      'если сценарий выложен, остаётся; снять её — market_unpublish.',
     input: {
       case: caseField,
       bot: botField,

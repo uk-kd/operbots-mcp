@@ -1,7 +1,8 @@
 /**
  * Справочники панели: из чего можно собирать сценарии, какие бывают
  * ИИ-сервисы и права. Один инструмент вместо четырёх — справочники
- * запрашивают редко и обычно по одному.
+ * запрашивают редко и обычно по одному. Готовые сценарии здесь больше
+ * не живут: они переехали в маркет (market_list, market_install).
  */
 
 import { z } from 'zod';
@@ -18,18 +19,6 @@ interface NodeType {
   inputs: number;
   outputs: string[];
   config_schema: Record<string, unknown>[];
-}
-
-interface Template {
-  key: string;
-  /** Название, которым панель заполняет свою форму создания. */
-  name: string;
-  title: string;
-  description: string;
-  nodes: number;
-  edges: number;
-  /** Сколько узлов заготовки ждут подключения к ИИ и базы знаний. */
-  needs: { ai: number; knowledge: number };
 }
 
 interface AIKind {
@@ -78,14 +67,14 @@ export const catalogTools: Tool[] = [
     kind: 'read',
     description:
       'Что можно использовать при сборке: платформы с их пределами, виды узлов сценария с ' +
-      'полным составом их настроек, заготовки сценариев, виды ИИ-сервисов с нужными ключами ' +
-      'и каталог прав. Смотрите node_kinds перед тем, как собирать или править сценарий: ' +
+      'полным составом их настроек, разделы маркета, виды ИИ-сервисов с нужными ключами ' +
+      'и каталог прав. Готовые сценарии ищите в маркете: market_list и market_install. Смотрите node_kinds перед тем, как собирать или править сценарий: ' +
       'config каждого узла описан именно там — и передавайте platform: сами узлы у платформ ' +
       'одни и те же, а варианты в их настройках разные (у MAX нет разметки MarkdownV2 и ' +
       'голосового среди вложений).',
     input: {
       what: z
-        .enum(['platforms', 'node_kinds', 'flow_templates', 'ai_kinds', 'permissions'])
+        .enum(['platforms', 'node_kinds', 'market_categories', 'ai_kinds', 'permissions'])
         .describe('Какой справочник показать.'),
       kind: z
         .string()
@@ -156,29 +145,11 @@ export const catalogTools: Tool[] = [
           );
         }
 
-        case 'flow_templates': {
-          const list = await ctx.api.get<Template[]>('/flow-templates');
+        case 'market_categories': {
+          const list = await ctx.api.get<{ key: string; title: string }[]>('/market/categories');
           return report(
-            `Заготовок сценариев: ${list.length}`,
-            list.map((item) => ({
-              ключ: item.key,
-              название: item.title,
-              // Этим панель заполняет своё поле «Название» в форме
-              // создания. Через flows_save название всегда своё: name
-              // там обязателен, и шаблонное не подставляется.
-              название_по_умолчанию_в_панели: item.name,
-              описание: item.description,
-              узлов: item.nodes,
-              связей: item.edges,
-              // Заготовка с узлами «Ответ ИИ» без подключения отвечает
-              // пустотой, а с базой, которую не выбрали, — «из головы».
-              нужно: item.needs?.ai
-                ? `узлов с ИИ ${item.needs.ai}` +
-                  (item.needs.knowledge ? `, из них с базой знаний ${item.needs.knowledge}` : '') +
-                  '; передайте flows_save provider' +
-                  (item.needs.knowledge ? ' и knowledge_base' : '')
-                : undefined,
-            })),
+            `Разделов маркета: ${list.length}`,
+            list.map((item) => ({ ключ: item.key, название: item.title })),
           );
         }
 

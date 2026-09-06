@@ -4,7 +4,7 @@
 
 MCP-сервер панели [operbots](https://github.com/uk-kd/operbots). Даёт Claude Code
 и другим клиентам MCP работать с делами, ботами Telegram и MAX, сценариями на полотне,
-перепиской, рассылками, базой знаний и подключениями к ИИ.
+маркетом готовых сценариев, перепиской, рассылками, базой знаний и подключениями к ИИ.
 
 **Права те же, что у вас.** Токен опознаёт вашу учётную запись, и панель применяет
 к запросам те же проверки ролей и прав по делам. Выдать помощнику больше, чем
@@ -12,6 +12,7 @@ MCP-сервер панели [operbots](https://github.com/uk-kd/operbots). Д�
 
 ```
 собери сценарий приёма заявок для бота поддержки и прогони его на «привет»
+поставь из маркета «Консультант с ИИ» боту магазина с нашим GigaChat и базой «Прайс»
 покажи диалоги, где ждут ответа дольше часа, и ответь им от имени бота
 добавь в базу знаний прайс со страницы example.com/prices и проверь поиск
 составь рассылку про новый прайс клиентам, кроме отписавшихся, и покажи, кому уйдёт
@@ -74,7 +75,7 @@ Claude Code.
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_TOKEN` | Токен вместо сохранённого файла: контейнер, сборка |
 | `OPERBOTS_CASE` | Дело по умолчанию: короткое имя, название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 29 вместо 72; вход и выход остаются |
+| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 31 вместо 82; вход и выход остаются |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
 | `OPERBOTS_TIMEOUT_MS` | Сколько ждать ответ панели. По умолчанию 30000 |
 | `OPERBOTS_INSECURE_TLS=1` | Не проверять сертификат — для самоподписанного TLS |
@@ -83,8 +84,8 @@ Claude Code.
 
 ## Инструменты
 
-72 штуки. Дела, ботов, сценарии, материалы, заготовки, рассылки и подключения можно
-называть по имени — идентификаторы не нужны:
+82 штуки. Дела, ботов, сценарии, публикации маркета, материалы, заготовки, рассылки и
+подключения можно называть по имени — идентификаторы не нужны:
 `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
 | Раздел | Инструменты |
@@ -94,20 +95,41 @@ Claude Code.
 | **Люди** | `members_list`, `members_save`, `members_remove`, `case_transfer`, `roles_save`, `roles_delete`, `invites_create`, `invites_revoke` |
 | **Боты** | `bots_list`, `bots_get`, `bots_journal`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_check`, `bots_webhook_rotate`, `bots_delete` |
 | **Сценарии** | `flows_list`, `flows_get`, `flows_save`, `flows_publish`, `flows_versions`, `flows_restore`, `flows_simulate`, `flows_export`, `flows_import`, `flows_delete` |
-| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_export`, `dialogs_reply`, `dialogs_update`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
+| **Маркет** | `market_list`, `market_get`, `market_like`, `market_install`, `market_publish`, `market_release`, `market_update`, `market_unpublish` |
+| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_export`, `dialogs_reply`, `dialogs_edit_message`, `dialogs_delete_message`, `dialogs_update`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
 | **Заготовки ответов** | `replies_list`, `replies_save`, `replies_delete` |
 | **Рассылки** | `broadcasts_list`, `broadcasts_preview`, `broadcasts_save`, `broadcasts_start`, `broadcasts_cancel` |
 | **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_document`, `knowledge_document_update`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
 | **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_test`, `ai_delete` |
-| **Справочники** | `operbots_catalog` — платформы с их пределами, виды узлов с настройками, заготовки, виды ИИ-сервисов, права |
+| **Справочники** | `operbots_catalog` — платформы с их пределами, виды узлов с настройками, разделы маркета, виды ИИ-сервисов, права |
 
-Восемнадцать помечены необратимыми — клиент спросит разрешение. Удаление дела, бота,
+Двадцать помечены необратимыми — клиент спросит разрешение. Удаление дела, бота,
 сценария, диалога и базы знаний целиком, передача дела другому владельцу и запуск
 рассылки требуют вдобавок названия дословно: случайный вызов не сотрёт и не разошлёт.
 
-Режим `OPERBOTS_READ_ONLY=1` оставляет 29 инструментов: всё чтение плюс `operbots_login`
+Режим `OPERBOTS_READ_ONLY=1` оставляет 31 инструмент: всё чтение плюс `operbots_login`
 и `operbots_logout` — они правят не панель, а токен на этой машине, и без них человек
 с отозванным токеном остался бы с советом войти и без способа это сделать.
+
+### Маркет
+
+Готовые сценарии — «Консультант с ИИ», «Заявка», «Запись на визит» и остальные — живут в
+маркете вместе с публикациями других дел, и ставятся оттуда: `market_list` находит,
+`market_install` заводит боту новый сценарий рядом с существующими и не включает его в
+работу. Узлам «Ответ ИИ» при установке передают `provider` и `knowledge_base` — что именно
+нужно сценарию, показывает карточка `market_get`. Своё выкладывают через `market_publish`
+по праву `market.publish`; карточку и граф увидят все пользователи панели, поэтому текст
+в настройках узлов стоит проверить заранее — ссылки на подключения панель снимает сама,
+а вписанные руками адреса и ключи нет. Название дела на карточке не показывается, пока не
+разрешить `show_origin`.
+
+### Переписка
+
+`dialogs_history` печатает `id` каждого сообщения: по нему `dialogs_reply reply_to`
+отвечает цитатой, `dialogs_edit_message` правит текст уже отправленного — и у собеседника,
+и в панели, — а `dialogs_delete_message` убирает своё сообщение из чата собеседника. В
+переписке панели удалённое остаётся зачёркнутым: история разговора важнее чистой ленты.
+Чужие сообщения не правятся и не удаляются.
 
 ### Рассылка
 

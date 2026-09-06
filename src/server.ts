@@ -18,6 +18,7 @@ import { catalogTools } from './tools/catalog.js';
 import { dialogTools } from './tools/dialogs.js';
 import { flowTools } from './tools/flows.js';
 import { knowledgeTools } from './tools/knowledge.js';
+import { marketTools } from './tools/market.js';
 import { peopleTools } from './tools/people.js';
 import type { Tool } from './tools/kit.js';
 
@@ -28,6 +29,7 @@ const ALL_TOOLS: Tool[] = [
   ...peopleTools,
   ...botTools,
   ...flowTools,
+  ...marketTools,
   ...dialogTools,
   ...knowledgeTools,
   ...aiTools,
@@ -53,7 +55,7 @@ export function createServer(config: Config): McpServer {
     {
       instructions:
         'operbots — панель управления ботами Telegram и MAX: дела, боты, сценарии на ' +
-        'полотне, диалоги, рассылки, база знаний и подключения к ИИ.\n\n' +
+        'полотне, маркет готовых сценариев, диалоги, рассылки, база знаний и подключения к ИИ.\n\n' +
         'Сервер работает от имени вошедшего пользователя и ограничен ровно его правами: ' +
         'всё, что не позволено роли в панели, вернёт отказ. Начните с whoami, чтобы узнать ' +
         'учётную запись, доступные дела и права в них.\n\n' +
@@ -67,7 +69,9 @@ export function createServer(config: Config): McpServer {
         'платформы бота нет.\n\n' +
         'Правка сценария заменяет граф целиком: сначала flows_get, затем flows_save со всеми ' +
         'узлами и связями. Состав настроек каждого вида узла — в operbots_catalog ' +
-        'what=node_kinds.\n\n' +
+        'what=node_kinds. Готовые сценарии — «Консультант с ИИ», «Заявка», «Запись на визит» ' +
+        'и публикации других дел — берут из маркета: market_list, затем market_install; ' +
+        'flows_save создаёт только пустой сценарий или свой граф.\n\n' +
         'Рассылка идёт в два шага: broadcasts_save заводит черновик, отправку начинает ' +
         'broadcasts_start, и она необратима. Между ними — broadcasts_preview: пустой отбор ' +
         'означает всех собеседников бота.',
