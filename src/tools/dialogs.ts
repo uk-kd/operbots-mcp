@@ -47,6 +47,14 @@ interface Message {
   node_id: string | null;
   error: string | null;
   created_at: string;
+  /** Что ещё знает панель о сообщении: цитата, правки, удаление, вложения. */
+  payload?: {
+    reply?: { text?: string } | null;
+    edited?: boolean;
+    deleted?: boolean;
+    attachments?: { kind?: string; file_name?: string }[];
+    [key: string]: unknown;
+  };
 }
 
 interface Journey {
@@ -553,15 +561,30 @@ export const dialogTools: Tool[] = [
         return 'система';
       };
 
-      const lines = messages.map((message) =>
-        [
-          `[${message.created_at}] ${who(message)}: ${message.text ?? '(без текста)'}`,
+      // Номер сообщения — чтобы на него можно было ответить цитатой,
+      // поправить или удалить: dialogs_reply reply_to,
+      // dialogs_edit_message и dialogs_delete_message ждут именно его.
+      const lines = messages.map((message) => {
+        const extra = message.payload ?? {};
+        const marks = [
+          extra.deleted ? 'удалено у собеседника' : null,
+          extra.edited ? 'изменено' : null,
+        ].filter(Boolean);
+        const files = (extra.attachments ?? [])
+          .map((file) => file.file_name || file.kind)
+          .filter(Boolean);
+        return [
+          `[${message.created_at}] ${who(message)}: ${message.text ?? '(без текста)'}` +
+            (marks.length > 0 ? ` (${marks.join(', ')})` : ''),
+          `    id: ${message.id}`,
+          extra.reply?.text ? `    в ответ на: ${extra.reply.text}` : null,
+          files.length > 0 ? `    вложения: ${files.join(', ')}` : null,
           message.node_id ? `    узел: ${message.node_id}` : null,
           message.error ? `    ошибка доставки: ${message.error}` : null,
         ]
           .filter(Boolean)
-          .join('\n'),
-      );
+          .join('\n');
+      });
 
       const earliest = messages[0]?.created_at;
       const tail =
@@ -605,7 +628,8 @@ export const dialogTools: Tool[] = [
     kind: 'write',
     description:
       'Отправляет сообщение человеку от имени бота — своим текстом или заготовкой из ' +
-      'replies_list. По умолчанию диалог переходит в ручной ' +
+      'replies_list, при желании цитатой на конкретное сообщение (reply_to). ' +
+      'По умолчанию диалог переходит в ручной ' +
       'режим и закрепляется за вами — сценарий перестаёт вести разговор, пока его не вернут ' +
       '(dialogs_update mode=bot). Бот должен быть запущен. Проверяйте поле «ошибка доставки» ' +
       'в ответе: сообщение сохраняется даже тогда, когда платформа его не приняла.',
@@ -634,6 +658,13 @@ export const dialogTools: Tool[] = [
         .boolean()
         .optional()
         .describe('Перевести диалог в ручной режим. По умолчанию да.'),
+      reply_to: z
+        .string()
+        .optional()
+        .describe(
+          'Ответить цитатой: id сообщения из dialogs_history. Служебные записи и уже ' +
+            'удалённые сообщения цитировать нельзя — у собеседника их нет.',
+        ),
     },
     async run(args, ctx) {
       if (args.text && args.reply) {
@@ -647,7 +678,7 @@ export const dialogTools: Tool[] = [
       const dialog = await findDialog(ctx, found.id, args.dialog);
       const message = await ctx.api.post<Message>(
         `/cases/${found.id}/dialogs/${dialog.id}/messages`,
-        body({ text, take_over: args.take_over }),
+        body({ text, take_over: args.take_over, reply_to: args.reply_to }),
       );
 
       if (message.error) {
@@ -664,7 +695,62 @@ export const dialogTools: Tool[] = [
 
       return (
         `Отправлено «${dialog.contact_name}» от имени бота ${dialog.bot_name}` +
-        (template ? ` — заготовка «${template.title}».` : '.')
+        (template ? ` — заготовка «${template.title}»` : '') +
+        (args.reply_to ? ' цитатой' : '') +
+        `. id сообщения: ${message.id}`
+      );
+    },
+  }),
+
+  tool({
+    name: 'dialogs_edit_message',
+    title: 'Изменить отправленное сообщение',
+    kind: 'write',
+    description:
+      'Меняет текст сообщения, которое бот или оператор уже отправили, — и у собеседника, и в ' +
+      'переписке панели. Только свои сообщения: чужие и служебные не правятся. Не дошедшее ' +
+      'изменить нельзя — только отправить заново; подпись к вложению панель пока не правит. ' +
+      'Кнопки остаются прежними. Бот должен быть запущен; слишком старое сообщение платформа ' +
+      'может не дать изменить.',
+    input: {
+      case: caseField,
+      dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
+      message: z.string().describe('id сообщения из dialogs_history.'),
+      text: z.string().min(1).max(4096).describe('Новый текст целиком.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const message = await ctx.api.patch<Message>(
+        `/cases/${found.id}/dialogs/${dialog.id}/messages/${args.message.trim()}`,
+        { text: args.text },
+      );
+      return `Сообщение изменено у «${dialog.contact_name}». Теперь: ${message.text ?? ''}`;
+    },
+  }),
+
+  tool({
+    name: 'dialogs_delete_message',
+    title: 'Удалить сообщение у собеседника',
+    kind: 'danger',
+    description:
+      'Убирает своё сообщение из чата собеседника; в переписке панели запись остаётся ' +
+      'зачёркнутой — след того, что и когда убрали. Только свои: сообщения собеседника не ' +
+      'удаляются. Вернуть нельзя. Слишком старое сообщение платформа удалить не даст.',
+    input: {
+      case: caseField,
+      dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
+      message: z.string().describe('id сообщения из dialogs_history.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const message = await ctx.api.delete<Message>(
+        `/cases/${found.id}/dialogs/${dialog.id}/messages/${args.message.trim()}`,
+      );
+      return (
+        `Сообщение удалено у «${dialog.contact_name}»; в переписке осталось зачёркнутым: ` +
+        `${(message.text ?? '').slice(0, 120)}`
       );
     },
   }),

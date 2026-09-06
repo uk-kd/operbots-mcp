@@ -29,6 +29,7 @@ export const PERMISSIONS = [
   'flow.edit',
   'flow.publish',
   'flow.delete',
+  'market.publish',
   'chat.view',
   'chat.reply',
   'chat.takeover',
@@ -72,24 +73,39 @@ export const NODE_KINDS = [
   'action.attempts',
   'action.reset',
   'action.compute',
+  'action.keyboard',
+  'action.form',
+  'action.contact',
+  'action.poll',
   'action.hours',
   'action.parse_date',
   'action.format_date',
   'action.schedule_at',
   'flow.split',
   'flow.merge',
+  'flow.end',
 ] as const;
 
-/** `app/services/flow_templates.py` — заготовки стартового графа. */
-export const FLOW_TEMPLATES = [
-  'blank',
-  'ai_consultant',
-  'faq_menu',
-  'lead_form',
+/**
+ * `app/models/market.py` — MarketCategory: разделы маркета сценариев.
+ * Готовые сценарии проекта переехали из заготовок формы создания сюда:
+ * ставят их через market_install, а не через flows_save.
+ */
+export const MARKET_CATEGORIES = [
+  'sales',
+  'support',
   'booking',
-  'support_desk',
-  'onboarding',
+  'survey',
+  'ai',
+  'notify',
+  'other',
 ] as const;
+
+/** `app/models/market.py` — MarketSource: кто выложил публикацию. */
+export const MARKET_SOURCES = ['project', 'community'] as const;
+
+/** `app/schemas/market.py` — Sort: порядок каталога маркета. */
+export const MARKET_SORTS = ['popular', 'new', 'likes'] as const;
 
 /** `app/bots/ai/registry.py` — виды подключаемых ИИ-сервисов. */
 export const AI_KINDS = ['gigachat', 'yandexgpt', 'openai', 'openrouter', 'custom'] as const;
