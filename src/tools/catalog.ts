@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 
-import { BOT_PLATFORMS } from '../enums.js';
+import { BOT_PLATFORMS, FLOW_SCOPES } from '../enums.js';
 import { report } from '../format.js';
 import { tool, type Tool } from './kit.js';
 
@@ -88,6 +88,13 @@ export const catalogTools: Tool[] = [
             'придёт полный набор, и сценарий можно собрать с вариантом, которого у ' +
             'платформы бота нет.',
         ),
+      scope: z
+        .enum(FLOW_SCOPES)
+        .optional()
+        .describe(
+          'Для node_kinds: под какой вид сценария — dialog (личная переписка) или ' +
+            'community (группы и каналы). Без него — узлы обоих видов, у каждого поле scopes.',
+        ),
     },
     async run(args, ctx) {
       switch (args.what) {
@@ -115,10 +122,10 @@ export const catalogTools: Tool[] = [
         }
 
         case 'node_kinds': {
-          const list = await ctx.api.get<NodeType[]>(
-            '/flow-nodes',
-            args.platform ? { platform: args.platform } : undefined,
-          );
+          const list = await ctx.api.get<NodeType[]>('/flow-nodes', {
+            platform: args.platform,
+            scope: args.scope,
+          });
           const wanted = args.kind
             ? list.filter((item) => item.kind === args.kind || item.kind.includes(args.kind ?? ''))
             : list;

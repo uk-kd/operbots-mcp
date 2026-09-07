@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 
-import { NODE_KINDS } from '../enums.js';
+import { FLOW_SCOPES, NODE_KINDS, SIMULATE_EVENTS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { MASK, raw, report } from '../format.js';
 import { caseField, botField, body, tool, type Tool } from './kit.js';
@@ -61,6 +61,8 @@ export interface Flow {
   bot_id: string;
   name: string;
   description: string | null;
+  /** dialog — личная переписка, community — сообщества. */
+  scope: string;
   is_active: boolean;
   version: number;
   graph: RawGraph;
@@ -75,6 +77,7 @@ interface FlowBrief {
   name: string;
   bot_name: string;
   description: string | null;
+  scope: string;
   is_active: boolean;
   version: number;
   nodes_count: number;
@@ -261,12 +264,18 @@ export function marketNote(link: MarketLink | null | undefined): string | undefi
   return `установлен из маркета «${link.title}», версия ${link.version}${fresh}`;
 }
 
+/** Вид сценария словами: «диалогов» или «сообществ» — после «для». */
+export function scopeWord(scope: string | undefined): string {
+  return scope === 'community' ? 'сообществ' : 'диалогов';
+}
+
 export function showFlow(flow: Flow, withGraph: boolean) {
   const flat = flatten(flow.graph);
   return {
     сценарий: flow.name,
     идентификатор: flow.id,
     описание: flow.description,
+    для: scopeWord(flow.scope),
     в_работе: flow.is_active,
     редакция: flow.version,
     узлов: flat.nodes.length,
@@ -312,7 +321,9 @@ export const flowTools: Tool[] = [
     kind: 'read',
     description:
       'Какие сценарии заведены, какой из них в работе и сколько в них узлов. ' +
-      'Без параметра bot возвращает сценарии всего дела — со всех ботов сразу.',
+      'Без параметра bot возвращает сценарии всего дела — со всех ботов сразу. У сценария ' +
+      'есть вид: для диалогов (личная переписка) или для сообществ (группы и каналы); у бота ' +
+      'по одному включённому на вид.',
     input: {
       case: caseField,
       bot: botField.optional().describe(
@@ -331,6 +342,7 @@ export const flowTools: Tool[] = [
             сценарий: item.name,
             бот: item.bot_name,
             идентификатор: item.id,
+            для: scopeWord(item.scope),
             в_работе: item.is_active,
             редакция: item.version,
             узлов: item.nodes_count,
@@ -350,6 +362,7 @@ export const flowTools: Tool[] = [
         list.map((item) => ({
           сценарий: item.name,
           идентификатор: item.id,
+          для: scopeWord(item.scope),
           в_работе: item.is_active,
           редакция: item.version,
           узлов: item.nodes_count,
@@ -406,6 +419,16 @@ export const flowTools: Tool[] = [
         ),
       name: z.string().min(1).max(120).optional().describe('Название сценария.'),
       description: z.string().max(2000).optional().describe('Описание.'),
+      scope: z
+        .enum(FLOW_SCOPES)
+        .optional()
+        .describe(
+          'Для какой переписки: dialog — личная (по умолчанию), community — сообщества: ' +
+            'группы и каналы. Узлы сообществ (trigger.member, trigger.post, action.kick и ' +
+            'другие) есть только у community, «Анкета» и «Кнопки под полем ввода» — только у ' +
+            'dialog; каталог под вид — operbots_catalog what=node_kinds scope=…. Сменить вид ' +
+            'можно только у выключенного сценария.',
+        ),
       nodes: z.array(nodeInput).optional().describe('Узлы сценария целиком.'),
       edges: z.array(edgeInput).optional().describe('Связи между узлами целиком.'),
       comment: z.string().max(240).optional().describe('Комментарий к редакции.'),
@@ -435,12 +458,13 @@ export const flowTools: Tool[] = [
           body({
             name: args.name,
             description: args.description,
+            scope: args.scope,
             graph,
           }),
         );
         return report(
           created.is_active
-            ? 'Сценарий создан и сразу включён в работу — он первый у бота.'
+            ? `Сценарий создан и сразу включён в работу — он первый у бота для ${scopeWord(created.scope)}.`
             : 'Сценарий создан.',
           showFlow(created, false),
         );
@@ -451,6 +475,7 @@ export const flowTools: Tool[] = [
       const payload = body({
         name: args.name,
         description: args.description,
+        scope: args.scope,
         graph,
         comment: args.comment,
       });
@@ -561,6 +586,13 @@ export const flowTools: Tool[] = [
       text: z.string().optional().describe('Текст входящего сообщения.'),
       command: z.string().optional().describe('Команда без косой черты, например start.'),
       callback_data: z.string().optional().describe('Данные нажатой кнопки.'),
+      event: z
+        .enum(SIMULATE_EVENTS)
+        .optional()
+        .describe(
+          'Для сценариев сообществ: post — пост в канале (text — его текст), join и leave — ' +
+            'участник вошёл или вышел (text — его имя). Без него — обычное сообщение.',
+        ),
       variables: z
         .record(z.string(), z.unknown())
         .optional()
@@ -580,6 +612,7 @@ export const flowTools: Tool[] = [
           text: args.text ?? '',
           command: args.command,
           callback_data: args.callback_data,
+          event: args.event,
           variables: args.variables,
         }),
       );

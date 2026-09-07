@@ -15,7 +15,13 @@ import { z } from 'zod';
 
 import type { Page } from '../api.js';
 import type { Context } from '../context.js';
-import { BOT_PLATFORMS, MARKET_CATEGORIES, MARKET_SORTS, MARKET_SOURCES } from '../enums.js';
+import {
+  BOT_PLATFORMS,
+  FLOW_SCOPES,
+  MARKET_CATEGORIES,
+  MARKET_SORTS,
+  MARKET_SOURCES,
+} from '../enums.js';
 import { ApiError } from '../errors.js';
 import { pageFooter, raw, report } from '../format.js';
 import { findProvider } from './bots.js';
@@ -46,6 +52,8 @@ interface ItemBrief {
   title: string;
   summary: string;
   category: string;
+  /** dialog — для личной переписки, community — для сообществ. */
+  scope: string;
   version: number;
   facts: Facts;
   installs_count: number;
@@ -99,6 +107,7 @@ function showBrief(item: ItemBrief) {
     короткое_имя: item.slug,
     кратко: item.summary,
     раздел: item.category,
+    для: item.scope === 'community' ? 'сообществ' : 'диалогов',
     от_кого: whose(item),
     версия: item.version,
     платформы: item.facts.platforms,
@@ -176,6 +185,10 @@ export const marketTools: Tool[] = [
       case: caseField,
       query: z.string().max(120).optional().describe('Что искать в названии и описании.'),
       category: z.enum(MARKET_CATEGORIES).optional().describe('Раздел маркета.'),
+      scope: z
+        .enum(FLOW_SCOPES)
+        .optional()
+        .describe('dialog — сценарии для личной переписки, community — для сообществ.'),
       platform: z
         .enum(BOT_PLATFORMS)
         .optional()
@@ -208,6 +221,7 @@ export const marketTools: Tool[] = [
       const page = await ctx.api.get<Page<ItemBrief>>('/market/items', {
         query: args.query,
         category: args.category,
+        scope: args.scope,
         platform: args.platform,
         source: args.source,
         needs_ai: args.needs_ai,
@@ -226,6 +240,7 @@ export const marketTools: Tool[] = [
           короткое_имя: item.slug,
           кратко: item.summary,
           раздел: item.category,
+          для: item.scope === 'community' ? 'сообществ' : 'диалогов',
           от_кого: whose(item),
           версия: item.version,
           платформы: item.facts.platforms,

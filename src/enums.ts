@@ -81,6 +81,14 @@ export const NODE_KINDS = [
   'action.parse_date',
   'action.format_date',
   'action.schedule_at',
+  'trigger.member',
+  'trigger.post',
+  'action.kick',
+  'action.mute',
+  'action.pin',
+  'action.chat_title',
+  'action.invite_link',
+  'action.is_admin',
   'flow.split',
   'flow.merge',
   'flow.end',
@@ -125,6 +133,23 @@ export const BOT_PLATFORMS = ['telegram', 'max'] as const;
 
 export const BOT_MODES = ['polling', 'webhook'] as const;
 export const DIALOG_MODES = ['bot', 'operator'] as const;
+
+/**
+ * `app/models/flow.py` — FlowScope: для какой переписки сценарий.
+ * dialog — личная, community — сообщества (группы и каналы). У бота по
+ * одному включённому на вид; какой ведёт разговор, решает вид чата.
+ */
+export const FLOW_SCOPES = ['dialog', 'community'] as const;
+
+/**
+ * `app/schemas/chat.py` — DialogKind: отбор диалогов по виду чата.
+ * private — личная переписка, community — все сообщества, group и
+ * channel — только группы или только каналы.
+ */
+export const DIALOG_KINDS = ['private', 'community', 'group', 'channel'] as const;
+
+/** `app/schemas/flow.py` — FlowSimulateRequest.event: что случилось в сообществе. */
+export const SIMULATE_EVENTS = ['post', 'join', 'leave'] as const;
 export const THEME_MODES = ['light', 'dark', 'auto'] as const;
 export const DOCUMENT_SOURCES = ['text', 'url', 'file'] as const;
 

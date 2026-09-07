@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import type { Context } from '../context.js';
 import type { Page } from '../api.js';
-import { DIALOG_MODES } from '../enums.js';
+import { DIALOG_KINDS, DIALOG_MODES } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { pageFooter, report } from '../format.js';
 import { findMember } from './people.js';
@@ -23,6 +23,10 @@ interface Dialog {
   bot_name: string;
   chat_id: number;
   chat_type: string;
+  /** Положение бота в сообществе: administrator, member, left; у личной переписки пусто. */
+  member_status: string | null;
+  /** Сценарий, назначенный этому сообществу поверх базового у бота. */
+  flow_id: string | null;
   username: string | null;
   contact_name: string;
   mode: string;
@@ -223,12 +227,34 @@ async function findDialog(ctx: Context, caseId: string, hint: string): Promise<D
   );
 }
 
+/** Вид чата словами: личный, группа, канал. */
+function chatKindWord(chatType: string): string {
+  if (chatType === 'private') return 'личный';
+  if (chatType === 'channel') return 'канал';
+  if (chatType === 'group' || chatType === 'supergroup') return 'группа';
+  return chatType;
+}
+
+interface ChatInfo {
+  available: boolean;
+  reason: string | null;
+  kind: string | null;
+  title: string | null;
+  description: string | null;
+  username: string | null;
+  link: string | null;
+  members: number | null;
+  bot_status: string | null;
+}
+
 const showDialog = (dialog: Dialog) => ({
   собеседник: dialog.contact_name,
   идентификатор: dialog.id,
   бот: dialog.bot_name,
   ник: dialog.username ? `@${dialog.username}` : undefined,
-  чат: `${dialog.chat_id} (${dialog.chat_type})`,
+  чат: `${dialog.chat_id} (${chatKindWord(dialog.chat_type)})`,
+  бот_в_чате: dialog.member_status ?? undefined,
+  свой_сценарий: dialog.flow_id ?? undefined,
   режим: dialog.mode === 'operator' ? `ведёт оператор ${dialog.operator?.display_name ?? ''}` : 'по сценарию',
   ии_отвечает: dialog.is_ai_enabled,
   заблокирован: dialog.is_blocked || undefined,
@@ -432,11 +458,19 @@ export const dialogTools: Tool[] = [
     title: 'Список диалогов',
     kind: 'read',
     description:
-      'Переписки ботов дела с отбором по боту, режиму и подстроке. Показывает, где есть ' +
-      'непрочитанное и какие диалоги ведёт оператор.',
+      'Переписки ботов дела с отбором по боту, виду чата, режиму и подстроке. Показывает, где ' +
+      'есть непрочитанное и какие диалоги ведёт оператор. Сообщества — группы и каналы, где ' +
+      'состоит бот, — это те же диалоги с kind=community; в панели они в разделе «Сообщества».',
     input: {
       case: caseField,
       bot: z.string().optional().describe('Отобрать по боту: название, @username или идентификатор.'),
+      kind: z
+        .enum(DIALOG_KINDS)
+        .optional()
+        .describe(
+          'Вид чата: private — личная переписка, community — все сообщества, group — только ' +
+            'группы, channel — только каналы. Без него — всё вместе.',
+        ),
       mode: z
         .enum(DIALOG_MODES)
         .optional()
@@ -452,6 +486,7 @@ export const dialogTools: Tool[] = [
 
       const page = await ctx.api.get<Page<Dialog>>(`/cases/${found.id}/dialogs`, {
         bot_id: bot?.id,
+        kind: args.kind,
         mode: args.mode,
         query: args.query,
         only_unread: args.only_unread,
@@ -491,9 +526,29 @@ export const dialogTools: Tool[] = [
       const journey = await optional(
         ctx.api.get<Journey>(`/cases/${found.id}/dialogs/${dialog.id}/journey`),
       );
+      // Сообщество глазами платформы: люди, ссылка, роль бота. Личной
+      // переписке спрашивать нечего.
+      const chat =
+        dialog.chat_type === 'private'
+          ? null
+          : await optional(ctx.api.get<ChatInfo>(`/cases/${found.id}/dialogs/${dialog.id}/chat`));
 
       return report(`Диалог с «${dialog.contact_name}»`, {
         ...showDialog(dialog),
+        о_сообществе:
+          chat === null
+            ? undefined
+            : typeof chat === 'string'
+              ? chat
+              : chat.available
+                ? {
+                    название: chat.title,
+                    описание: chat.description,
+                    ссылка: chat.link,
+                    участников: chat.members,
+                    бот_в_чате: chat.bot_status,
+                  }
+                : chat.reason,
         переменные: Object.keys(dialog.variables ?? {}).length > 0 ? dialog.variables : undefined,
         по_сценарию:
           typeof journey === 'string'
@@ -760,8 +815,9 @@ export const dialogTools: Tool[] = [
     title: 'Настроить диалог',
     kind: 'write',
     description:
-      'Меняет режим ведения (сценарий или оператор), отвечает ли ИИ, метки и закрепление. ' +
-      'Перевод в режим bot возвращает разговор сценарию и снимает оператора. ' +
+      'Меняет режим ведения (сценарий или оператор), отвечает ли ИИ, метки, закрепление и ' +
+      'сценарий сообщества. Перевод в режим bot возвращает разговор сценарию и снимает ' +
+      'оператора. ' +
       'Заблокировать собеседника отсюда нельзя: блокировку приносит платформа, когда человек ' +
       'сам закрывает боту рот, — панель её только показывает.',
     input: {
@@ -774,16 +830,47 @@ export const dialogTools: Tool[] = [
       ai_enabled: z.boolean().optional().describe('Отвечает ли ИИ в этом диалоге.'),
       pinned: z.boolean().optional().describe('Закрепить наверху списка.'),
       tags: z.array(z.string()).optional().describe('Метки. Заменяют прежние целиком.'),
+      flow: z
+        .string()
+        .optional()
+        .describe(
+          'Только для сообществ: свой сценарий этого чата поверх базового у бота — название ' +
+            'или идентификатор сценария вида community у того же бота. Пустая строка — ' +
+            'вернуть базовый.',
+        ),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const dialog = await findDialog(ctx, found.id, args.dialog);
+
+      let flowId: string | null | undefined;
+      if (args.flow !== undefined) {
+        if (args.flow === '') {
+          flowId = null;
+        } else {
+          const flows = await ctx.api.get<{ id: string; name: string; scope: string }[]>(
+            `/cases/${found.id}/bots/${dialog.bot_id}/flows`,
+          );
+          const needle = args.flow.trim().toLowerCase();
+          const chosen = flows.find(
+            (item) => item.id === args.flow || item.name.toLowerCase() === needle,
+          );
+          if (!chosen) {
+            return `У бота «${dialog.bot_name}» нет сценария «${args.flow}». Есть: ${flows
+              .filter((item) => item.scope === 'community')
+              .map((item) => item.name)
+              .join(', ')}`;
+          }
+          flowId = chosen.id;
+        }
+      }
 
       const payload = body({
         mode: args.mode,
         is_ai_enabled: args.ai_enabled,
         is_pinned: args.pinned,
         tags: args.tags,
+        flow_id: flowId,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 
