@@ -31,6 +31,8 @@ interface Bot {
   dialogs_count: number;
   unread_count: number;
   active_flow_id: string | null;
+  /** Включённые сценарии по видам: { dialog, community }. */
+  active_flows: Record<string, string>;
   webhook_url: string;
   webhook_ready: boolean;
   webhook_hint: string;
@@ -109,7 +111,8 @@ function showBot(bot: Bot, full = false) {
     токен: bot.token_hint,
     диалогов: bot.dialogs_count,
     непрочитано: bot.unread_count || undefined,
-    активный_сценарий: bot.active_flow_id,
+    сценарий_диалогов: bot.active_flows?.dialog ?? null,
+    сценарий_сообществ: bot.active_flows?.community ?? null,
     подключение_ии: bot.ai_provider_id,
     описание: full ? bot.description : undefined,
     настройки: full && Object.keys(bot.settings ?? {}).length > 0 ? bot.settings : undefined,

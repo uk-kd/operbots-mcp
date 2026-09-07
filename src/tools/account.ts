@@ -221,7 +221,9 @@ export const accountTools: Tool[] = [
     title: 'Изменить данные аккаунта',
     kind: 'write',
     description:
-      'Меняет ФИО, дату рождения, телефон и часовой пояс учётной записи. Передавайте только ' +
+      'Меняет ФИО, дату рождения, телефон, часовой пояс и номера в Telegram и MAX учётной ' +
+      'записи — по номерам бот шлёт участнику весточки из сценария (узел «Сообщить в чат» с ' +
+      'адресатом «участник команды»). Передавайте только ' +
       'те поля, которые нужно изменить: остальные останутся как есть. Этим же инструментом ' +
       'проходят шаг знакомства: пока фамилии, имени и даты рождения нет, API закрыт целиком.',
     input: {
@@ -234,6 +236,20 @@ export const accountTools: Tool[] = [
         .describe('Дата рождения в виде ГГГГ-ММ-ДД. Без неё профиль считается незаполненным.'),
       phone: z.string().max(32).optional().describe('Телефон.'),
       timezone: z.string().max(64).optional().describe('Часовой пояс, например Europe/Moscow.'),
+      telegram_id: z
+        .number()
+        .int()
+        .positive()
+        .nullable()
+        .optional()
+        .describe('Номер в Telegram (число, не @имя). null — стереть.'),
+      max_id: z
+        .number()
+        .int()
+        .positive()
+        .nullable()
+        .optional()
+        .describe('Номер человека в MAX. null — стереть.'),
     },
     async run(args, ctx) {
       const payload = Object.fromEntries(
@@ -247,6 +263,8 @@ export const accountTools: Tool[] = [
         дата_рождения: user.birth_date,
         телефон: user.phone,
         часовой_пояс: user.timezone,
+        telegram_id: user.telegram_id,
+        max_id: user.max_id,
         профиль_заполнен: user.profile_completed,
       });
     },
