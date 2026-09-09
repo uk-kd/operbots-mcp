@@ -41,6 +41,35 @@ Claude Code.
 и разваливалась: `npx` на Windows оказывался `.cmd`, на холодном кэше уходил в реестр
 дольше рукопожатия, а про старый Node молчал вовсе.
 
+### Codex
+
+Установите плагин через CLI (Node 20+ должен быть доступен в PATH):
+
+```bash
+codex plugin marketplace add uk-kd/operbots-mcp
+codex plugin add operbots-mcp@operbots
+```
+
+Если токен ещё не сохранён, выполните `npx operbots-mcp@latest login`.
+Codex и Claude Code используют один профиль `~/.operbots/credentials.json`;
+повторно выпускать токен не нужно. Проверка доступа: `npx operbots-mcp@latest status`.
+После установки откройте новый диалог Codex и вызовите `whoami`.
+
+Для разработки подключите локальный репозиторий:
+
+```bash
+codex plugin marketplace add /полный/путь/к/operbots-mcp
+codex plugin add operbots-mcp@operbots
+```
+
+Пакет содержит переносимые `plugin.json` и `mcp.json`. Codex разворачивает
+`${PLUGIN_ROOT}` в абсолютный путь установленного плагина; Claude Code использует
+свой `.claude-plugin/plugin.json` с `${CLAUDE_PLUGIN_ROOT}`. Не копируйте команду
+из манифеста Claude в Codex вручную: в старом подключении переменная оставалась
+буквальной и Node завершался с `MODULE_NOT_FOUND` до рукопожатия MCP.
+Если установлен выпуск 0.1.17 без переносимого манифеста, переустановите плагин
+из исправленного выпуска либо локального репозитория.
+
 ### Другие клиенты MCP
 
 `operbots-mcp setup` в конце печатает готовую строку запуска с полным путём — её и

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "operbots-mcp",
+  "version": "0.1.17",
+  "description": "Панель operbots в Codex и Claude Code: дела, боты Telegram и MAX, сценарии, диалоги, рассылки, база знаний и ИИ.",
+  "author": {
+    "name": "Nikita Belan",
+    "url": "https://github.com/uk-kd"
+  },
+  "homepage": "https://github.com/uk-kd/operbots-mcp#readme",
+  "repository": "https://github.com/uk-kd/operbots-mcp",
+  "license": "MIT",
+  "keywords": [
+    "operbots",
+    "telegram",
+    "max",
+    "боты",
+    "mcp"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "operbots",
+        "shortDescription": "Управление ботами Telegram и MAX",
+        "longDescription": "Панель operbots в Codex и Claude Code: дела, боты Telegram и MAX, сценарии, диалоги, рассылки, база знаний и ИИ.",
+        "developerName": "Nikita Belan",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "websiteURL": "https://operbots.ru",
+        "defaultPrompt": [
+          "Покажи мои дела и доступных ботов",
+          "Проверь, почему бот не отвечает",
+          "Покажи сценарии выбранного бота"
+        ]
+      }
+    }
+  }
+}

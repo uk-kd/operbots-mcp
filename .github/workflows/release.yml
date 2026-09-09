@@ -66,6 +66,7 @@ jobs:
       - name: Проверка запуска
         run: |
           npm run build
+          node scripts/plugin-smoke.mjs
           cat > handshake.mjs <<'NODE'
           import { spawn } from 'node:child_process';
 

@@ -20,8 +20,14 @@ const write = (path, value) =>
 
 const { version } = read('package.json');
 
-const plugin = read('plugins/operbots-mcp/.claude-plugin/plugin.json');
-plugin.version = version;
-write('plugins/operbots-mcp/.claude-plugin/plugin.json', plugin);
+for (const path of [
+  'plugins/operbots-mcp/.claude-plugin/plugin.json',
+  'plugins/operbots-mcp/.codex-plugin/plugin.json',
+  'plugins/operbots-mcp/plugin.json',
+]) {
+  const plugin = read(path);
+  plugin.version = version;
+  write(path, plugin);
+}
 
-process.stdout.write(`Версия ${version} разнесена: plugin.json\n`);
+process.stdout.write(`Version ${version} synchronized for Claude Code and Codex\n`);
