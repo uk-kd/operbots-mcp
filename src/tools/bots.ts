@@ -6,7 +6,7 @@
 import { z } from 'zod';
 
 import type { Page } from '../api.js';
-import type { Context } from '../context.js';
+import { pickByName, type Context } from '../context.js';
 import { BOT_MODES, BOT_PLATFORMS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { MASK, pageFooter, report } from '../format.js';
@@ -14,6 +14,7 @@ import { caseField, botField, body, limitField, optional, tool, type Tool } from
 
 interface Bot {
   id: string;
+  case_id: string;
   name: string;
   username: string | null;
   /** Куда подключён бот: telegram или max. */
@@ -26,8 +27,10 @@ interface Bot {
   autostart: boolean;
   token_hint: string;
   external_id: number | null;
+  avatar_url: string | null;
   ai_provider_id: string | null;
   settings: Record<string, unknown>;
+  stats: Record<string, unknown>;
   dialogs_count: number;
   unread_count: number;
   active_flow_id: string | null;
@@ -38,6 +41,9 @@ interface Bot {
   webhook_hint: string;
   started_at: string | null;
   last_update_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface Command {
@@ -101,8 +107,11 @@ function showBot(bot: Bot, full = false) {
   return {
     бот: bot.name,
     идентификатор: bot.id,
+    дело: bot.case_id,
     платформа: bot.platform,
     имя_у_платформы: bot.username ? `@${bot.username}` : null,
+    идентификатор_у_платформы: bot.external_id,
+    аватар: full ? bot.avatar_url : undefined,
     состояние: bot.status,
     сообщение: bot.status_message,
     включён: bot.is_enabled,
@@ -116,6 +125,10 @@ function showBot(bot: Bot, full = false) {
     подключение_ии: bot.ai_provider_id,
     описание: full ? bot.description : undefined,
     настройки: full && Object.keys(bot.settings ?? {}).length > 0 ? bot.settings : undefined,
+    статистика: full ? bot.stats : undefined,
+    архивирован: bot.archived_at,
+    создан: bot.created_at,
+    обновлён: full ? bot.updated_at : undefined,
     запущен: bot.started_at,
     последнее_обновление: bot.last_update_at,
   };
@@ -167,40 +180,12 @@ function hideWebhooksIn(text: string): string {
 
 export async function findProvider(ctx: Context, caseId: string, hint: string): Promise<Provider> {
   const list = await ctx.api.get<Provider[]>(`/cases/${caseId}/ai-providers`);
-  const needle = hint.trim().toLowerCase();
-
-  const match =
-    list.find((item) => item.id === hint) ??
-    list.find((item) => item.name.toLowerCase() === needle) ??
-    list.find((item) => item.name.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'provider_not_found',
-      `Подключения «${hint}» нет в деле. Есть: ${list.map((item) => item.name).join(', ') || 'ни одного'}`,
-    );
-  }
-  return match;
+  return list.find((item) => item.id === hint.trim()) ?? pickByName(list, hint);
 }
 
 async function findFlowId(ctx: Context, caseId: string, botId: string, hint: string): Promise<string> {
   const list = await ctx.api.get<FlowBrief[]>(`/cases/${caseId}/bots/${botId}/flows`);
-  const needle = hint.trim().toLowerCase();
-
-  const match =
-    list.find((item) => item.id === hint) ??
-    list.find((item) => item.name.toLowerCase() === needle) ??
-    list.find((item) => item.name.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'flow_not_found',
-      `Сценария «${hint}» у бота нет. Есть: ${list.map((item) => item.name).join(', ') || 'ни одного'}`,
-    );
-  }
-  return match.id;
+  return (list.find((item) => item.id === hint.trim()) ?? pickByName(list, hint)).id;
 }
 
 export const botTools: Tool[] = [
@@ -253,6 +238,7 @@ export const botTools: Tool[] = [
                   .slice()
                   .sort((a, b) => a.position - b.position)
                   .map((item) => ({
+                    идентификатор: item.id,
                     команда: `/${item.command}`,
                     описание: item.description,
                     видна_в_меню: item.is_visible,
@@ -265,6 +251,7 @@ export const botTools: Tool[] = [
             : variables.length === 0
               ? 'ни одной'
               : variables.map((item) => ({
+                  идентификатор: item.id,
                   ключ: item.key,
                   значение: item.is_secret ? '··· скрыто' : item.value,
                   описание: item.description,
@@ -284,6 +271,33 @@ export const botTools: Tool[] = [
                   связей: item.edges_count,
                 })),
       });
+    },
+  }),
+
+  tool({
+    name: 'bots_status',
+    title: 'Живое состояние бота',
+    kind: 'read',
+    description: 'Состояние живого рантайма: время работы, обновления, ошибки и время проверки.',
+    input: { case: caseField, bot: botField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const bot = await ctx.resolveBot(found.id, args.bot);
+      const status = await ctx.api.get<Record<string, unknown>>(`/cases/${found.id}/bots/${bot.id}/status`);
+      return report(`Текущее состояние бота «${bot.name}»`, status);
+    },
+  }),
+
+  tool({
+    name: 'bots_webhook_info',
+    title: 'Готовность панели к вебхукам',
+    kind: 'read',
+    description: 'Публичный адрес панели и условия для включения режима webhook. Бот не требуется.',
+    input: { case: caseField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const info = await ctx.api.get<Record<string, unknown>>(`/cases/${found.id}/bots/webhook-info`);
+      return report('Готовность панели к вебхукам', info);
     },
   }),
 
@@ -380,7 +394,8 @@ export const botTools: Tool[] = [
         .describe(
           'Куда подключаем нового бота. По умолчанию telegram. У подключённого не меняется.',
         ),
-      description: z.string().max(2000).optional().describe('Описание бота.'),
+      description: z.string().max(2000).nullable().optional().describe('Описание бота. null — стереть.'),
+      settings: z.record(z.string(), z.unknown()).optional().describe('Настройки бота целиком: заменяют прежний объект.'),
       mode: z
         .enum(BOT_MODES)
         .optional()
@@ -426,10 +441,9 @@ export const botTools: Tool[] = [
         );
         ctx.forgetBots(found.id);
 
-        const next = provider
-          ? await ctx.api.patch<Bot>(`/cases/${found.id}/bots/${created.id}`, {
-              ai_provider_id: provider.id,
-            })
+        const changes = body({ is_enabled: args.enabled, settings: args.settings, ai_provider_id: aiProviderId });
+        const next = Object.keys(changes).length > 0
+          ? await ctx.api.patch<Bot>(`/cases/${found.id}/bots/${created.id}`, changes)
           : created;
 
         return report('Бот подключён.', {
@@ -447,6 +461,7 @@ export const botTools: Tool[] = [
         autostart: args.autostart,
         is_enabled: args.enabled,
         ai_provider_id: aiProviderId,
+        settings: args.settings,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 
@@ -513,8 +528,8 @@ export const botTools: Tool[] = [
               .describe('Имя команды без косой черты: латиница, цифры, подчёркивание.'),
             description: z.string().max(256).optional().describe('Пояснение в меню бота.'),
             visible: z.boolean().optional().describe('Показывать в меню. По умолчанию да.'),
-            flow: z.string().optional().describe('Сценарий, который запускает команда.'),
-            node_id: z.string().optional().describe('Узел сценария, с которого начать.'),
+            flow: z.string().nullable().optional().describe('Сценарий, который запускает команда. null — отвязать.'),
+            node_id: z.string().nullable().optional().describe('Узел сценария, с которого начать. null — очистить.'),
           }),
         )
         .describe('Желаемое меню целиком, в нужном порядке.'),
@@ -537,7 +552,8 @@ export const botTools: Tool[] = [
 
       for (const [index, wanted] of args.commands.entries()) {
         const name = wanted.command.replace(/^\//, '').toLowerCase();
-        const flowId = wanted.flow ? await findFlowId(ctx, found.id, bot.id, wanted.flow) : undefined;
+        const flowId = wanted.flow === null ? null
+          : wanted.flow ? await findFlowId(ctx, found.id, bot.id, wanted.flow) : undefined;
         const current = byName.get(name);
 
         if (!current) {
@@ -610,8 +626,8 @@ export const botTools: Tool[] = [
         .array(
           z.object({
             key: z.string().min(1).max(64).describe('Имя переменной, например price.delivery'),
-            value: z.string().describe('Значение.'),
-            description: z.string().max(240).optional().describe('Для чего она.'),
+            value: z.string().optional().describe('Значение. Обязательно для новой переменной; без него существующее сохраняется.'),
+            description: z.string().max(240).nullable().optional().describe('Для чего она. null — стереть описание.'),
             secret: z.boolean().optional().describe('Скрывать значение в панели и здесь.'),
           }),
         )
@@ -626,6 +642,11 @@ export const botTools: Tool[] = [
 
       const existing = await ctx.api.get<Variable[]>(`${root}/variables`);
       const byKey = new Map(existing.map((item) => [item.key, item]));
+      for (const wanted of args.variables ?? []) {
+        if (!byKey.has(wanted.key) && wanted.value === undefined) {
+          throw new ApiError(400, 'value_required', `Для новой переменной «${wanted.key}» нужно значение.`);
+        }
+      }
       const added: string[] = [];
       const changed: string[] = [];
       const removed: string[] = [];
@@ -756,6 +777,39 @@ export const botTools: Tool[] = [
         состояние: updated.status,
         готовность: updated.webhook_ready ? 'панель готова принимать вебхуки' : updated.webhook_hint,
       });
+    },
+  }),
+
+  tool({
+    name: 'bots_detach',
+    title: 'Отключить бота с выбором сохраняемых данных',
+    kind: 'danger',
+    description: 'Отключает бота с точным подтверждением названием. По умолчанию сохраняет сценарии, диалоги, рассылки и журнал под архивной записью. Сценарии можно передать другому боту.',
+    input: {
+      case: caseField,
+      bot: botField,
+      confirm_name: z.string().describe('Точное название бота — подтверждение отключения.'),
+      keep_flows: z.boolean().optional().describe('Сохранить сценарии. По умолчанию да.'),
+      keep_dialogs: z.boolean().optional().describe('Сохранить диалоги. По умолчанию да.'),
+      keep_broadcasts: z.boolean().optional().describe('Сохранить рассылки. По умолчанию да.'),
+      keep_journal: z.boolean().optional().describe('Сохранить журнал. По умолчанию да.'),
+      flows_to: z.string().nullable().optional().describe('Бот для переноса сохраняемых сценариев: название или идентификатор. null — оставить под архивным ботом.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const bot = await ctx.resolveBot(found.id, args.bot);
+      if (args.confirm_name.trim() !== bot.name) {
+        return `Не отключаю: подтверждение «${args.confirm_name}» не совпадает с названием «${bot.name}».`;
+      }
+      const target = args.flows_to === undefined || args.flows_to === null ? null
+        : await ctx.resolveBot(found.id, args.flows_to);
+      const result = await ctx.api.post<{ message?: string }>(`/cases/${found.id}/bots/${bot.id}/detach`, body({
+        name: args.confirm_name.trim(), keep_flows: args.keep_flows, keep_dialogs: args.keep_dialogs,
+        keep_broadcasts: args.keep_broadcasts, keep_journal: args.keep_journal,
+        flows_to: args.flows_to === null ? null : target?.id,
+      }));
+      ctx.forgetBots(found.id);
+      return result.message ?? `Бот «${bot.name}» отключён.`;
     },
   }),
 

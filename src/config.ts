@@ -126,7 +126,7 @@ export function loadConfig(): Config {
     token: env('OPERBOTS_TOKEN'),
     defaultCase: env('OPERBOTS_CASE'),
     readOnly: flag('OPERBOTS_READ_ONLY'),
-    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 30_000,
+    timeoutMs: Number.isInteger(timeout) && timeout > 0 && timeout <= 2_147_483_647 ? timeout : 30_000,
     insecureTls: flag('OPERBOTS_INSECURE_TLS'),
   };
 }

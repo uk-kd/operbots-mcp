@@ -8,7 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { OperbotsApi } from './api.js';
 import { AuthManager } from './auth.js';
 import { PACKAGE_NAME, VERSION, applyProfileSettings, loadConfig, type Config } from './config.js';
-import { Context, type FormAnswer } from './context.js';
+import { Context } from './context.js';
 import { describeError } from './errors.js';
 import { accountTools } from './tools/account.js';
 import { aiTools } from './tools/ai.js';
@@ -20,6 +20,10 @@ import { flowTools } from './tools/flows.js';
 import { knowledgeTools } from './tools/knowledge.js';
 import { marketTools } from './tools/market.js';
 import { peopleTools } from './tools/people.js';
+import { requestTools } from './tools/requests.js';
+import { counterpartyTools } from './tools/counterparties.js';
+import { extensionTools } from './tools/extensions.js';
+import { notificationTools } from './tools/notifications.js';
 import type { Tool } from './tools/kit.js';
 
 const ALL_TOOLS: Tool[] = [
@@ -33,6 +37,10 @@ const ALL_TOOLS: Tool[] = [
   ...dialogTools,
   ...knowledgeTools,
   ...aiTools,
+  ...requestTools,
+  ...counterpartyTools,
+  ...extensionTools,
+  ...notificationTools,
 ];
 
 /** Что показываем клиенту с учётом режима «только чтение». */
@@ -55,12 +63,12 @@ export function createServer(config: Config): McpServer {
     {
       instructions:
         'operbots — панель управления ботами Telegram и MAX: дела, боты, сценарии на ' +
-        'полотне, маркет готовых сценариев, диалоги, рассылки, база знаний и подключения к ИИ.\n\n' +
+        'полотне, маркет, заявки, контрагенты, диалоги, рассылки, базы знаний, ИИ, расширения и уведомления.\n\n' +
         'Сервер работает от имени вошедшего пользователя и ограничен ровно его правами: ' +
         'всё, что не позволено роли в панели, вернёт отказ. Начните с whoami, чтобы узнать ' +
         'учётную запись, доступные дела и права в них.\n\n' +
         'Дела, ботов, сценарии и подключения можно указывать по названию — идентификаторы ' +
-        'не обязательны. Если дело не указано, берётся дело по умолчанию, иначе последнее ' +
+        'не обязательны. Новые заявки, задачи, контрагенты и расширения адресуются точным UUID. Если дело не указано, берётся дело по умолчанию, иначе последнее ' +
         'открытое в панели.\n\n' +
         'Платформа у каждого бота своя, и от неё зависят пределы длины, размер файла, виды ' +
         'вложений и разметка. Не угадывайте по имени: operbots_catalog what=platforms отдаёт ' +
@@ -74,26 +82,14 @@ export function createServer(config: Config): McpServer {
         'flows_save создаёт только пустой сценарий или свой граф.\n\n' +
         'Рассылка идёт в два шага: broadcasts_save заводит черновик, отправку начинает ' +
         'broadcasts_start, и она необратима. Между ними — broadcasts_preview: пустой отбор ' +
-        'означает всех собеседников бота.',
+        'означает всех собеседников бота.\n\n' +
+        'Правка и выполнение заявки требуют revision, правка и удаление типа — version из прочитанной карточки. ' +
+        'При конфликте перечитайте данные и согласуйте изменения. Не подставляйте новую ревизию автоматически. ' +
+        'Файлы передаются по явным абсолютным путям; скачивание не перезаписывает существующие файлы. ' +
+        'Никогда не запрашивайте пароль или токен через форму MCP: вход настраивается CLI login или локальным token_file, ' +
+        'смена пароля — password_file. Выпуск интеграционных токенов и настройка второго фактора требуют браузерной сессии панели.',
     },
   );
-
-  // Окно входа: клиент показывает форму человеку и возвращает ответ
-  // серверу напрямую, минуя переписку с моделью. Ждём долго — человек
-  // может уйти за паролем, а обычный предел запроса в минуту оборвал бы
-  // диалог прямо у него на глазах.
-  ctx.prompter = {
-    available: () => Boolean(server.server.getClientCapabilities()?.elicitation),
-    form: (message, fields, required) =>
-      server.server.elicitInput(
-        {
-          mode: 'form',
-          message,
-          requestedSchema: { type: 'object', properties: fields, required },
-        },
-        { timeout: 15 * 60 * 1000 },
-      ) as Promise<FormAnswer>,
-  };
 
   for (const item of selectTools(config)) {
     server.registerTool(

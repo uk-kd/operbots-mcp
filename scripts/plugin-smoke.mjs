@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -52,11 +52,25 @@ for (const [clientName, config, variable] of [
         await client.connect(transport);
         assert.equal(client.getServerVersion().version, version);
         const { tools } = await client.listTools();
-        assert.equal(tools.length, readOnly ? 31 : 82, errors);
+        assert.equal(tools.length, readOnly ? 56 : 143, errors);
         assert.ok(tools.some(tool => tool.name === 'whoami'));
         assert.ok(tools.some(tool => tool.name === 'operbots_login'));
-        if (readOnly) assert.ok(!tools.some(tool => tool.name === 'broadcasts_start'));
-      } finally { await client.close(); }
+        for (const name of ['requests_get', 'counterparties_get', 'extensions_get', 'notifications_list',
+          'ai_usage', 'bots_status', 'invites_get', 'dialogs_download_attachment']) {
+          assert.ok(tools.some(tool => tool.name === name), `missing ${name}`);
+        }
+        if (readOnly) {
+          assert.ok(tools.every(tool => tool.annotations?.readOnlyHint ||
+            ['operbots_login', 'operbots_logout'].includes(tool.name)));
+          for (const name of ['broadcasts_start', 'requests_save', 'dialogs_mark_read', 'knowledge_search']) {
+            assert.ok(!tools.some(tool => tool.name === name), `write tool exposed: ${name}`);
+          }
+        }
+      } finally {
+        await client.close();
+        assert.equal(dirname(cwd), tmpdir());
+        rmSync(cwd, { recursive: true });
+      }
     });
   }
 }

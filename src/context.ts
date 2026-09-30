@@ -45,37 +45,9 @@ interface Cached<T> {
   value: T;
 }
 
-/** Поле формы, которую клиент показывает человеку. */
-export interface FormField {
-  type: 'string';
-  title: string;
-  description?: string;
-  default?: string;
-  format?: 'uri' | 'email';
-  minLength?: number;
-}
-
-export interface FormAnswer {
-  action: 'accept' | 'decline' | 'cancel';
-  content?: Record<string, unknown>;
-}
-
-/**
- * Спрашивает что-то у человека через клиента MCP.
- *
- * Ответ идёт от клиента прямо серверу и в переписку с моделью не
- * попадает — иначе пароль оказался бы в её памяти.
- */
-export interface Prompter {
-  available(): boolean;
-  form(message: string, fields: Record<string, FormField>, required: string[]): Promise<FormAnswer>;
-}
-
 export class Context {
   private cases: Cached<CaseSummary[]> | null = null;
   private readonly bots = new Map<string, Cached<BotSummary[]>>();
-  /** Задаётся сервером после подключения клиента. */
-  prompter: Prompter | null = null;
 
   constructor(
     readonly api: OperbotsApi,
@@ -175,7 +147,7 @@ export class Context {
 
     const handle = wanted.replace(/^@/, '').toLowerCase();
     const byUsername = list.filter((item) => item.username?.toLowerCase() === handle);
-    if (byUsername.length === 1 && byUsername[0]) return byUsername[0];
+    if (handle && byUsername.length === 1 && byUsername[0]) return byUsername[0];
 
     return pickByName(list, wanted);
   }
@@ -186,8 +158,9 @@ export class Context {
  * вхождение подстроки. Неоднозначность — это ошибка, а не повод
  * взять первое попавшееся: не тот бот получит не то сообщение.
  */
-function pickByName<T extends { id: string; name: string }>(list: T[], wanted: string): T {
-  const needle = wanted.toLowerCase();
+export function pickByName<T extends { id: string; name: string }>(list: T[], wanted: string): T {
+  const needle = wanted.trim().toLowerCase();
+  if (!needle) throw new ApiError(400, 'name_required', 'Укажите название или идентификатор.');
 
   const exact = list.filter((item) => item.name.toLowerCase() === needle);
   if (exact.length === 1 && exact[0]) return exact[0];

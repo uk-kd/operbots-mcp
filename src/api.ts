@@ -7,10 +7,13 @@
  * роли вошедшего человека.
  */
 
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, isAbsolute } from 'node:path';
+
 import { API_PREFIX, USER_AGENT, type Config } from './config.js';
 import type { AuthManager } from './auth.js';
-import { ApiError } from './errors.js';
-import { parse, parseText, send } from './http.js';
+import { ApiError, ConfigError } from './errors.js';
+import { parse, parseBytes, parseText, send } from './http.js';
 
 export type Query = Record<string, string | number | boolean | string[] | undefined | null>;
 
@@ -19,7 +22,7 @@ interface CallOptions {
   body?: unknown;
 }
 
-/** Страница списка: панель отвечает так на все перечисления. */
+/** Страница списка. Некоторые разделы возвращают обычные массивы. */
 export interface Page<T> {
   items: T[];
   total: number;
@@ -45,12 +48,58 @@ export class OperbotsApi {
     return this.call<T>('PATCH', path, { body });
   }
 
-  put<T>(path: string, body?: unknown): Promise<T> {
-    return this.call<T>('PUT', path, { body });
+  put<T>(path: string, body?: unknown, query?: Query): Promise<T> {
+    return this.call<T>('PUT', path, { body, query });
   }
 
   delete<T>(path: string, query?: Query): Promise<T> {
     return this.call<T>('DELETE', path, { query });
+  }
+
+  /** Загрузка локального файла: тот же multipart, которым пользуется панель. */
+  async upload<T>(
+    path: string,
+    filePath: string,
+    fields: Record<string, string | number | boolean> = {},
+    contentType?: string,
+  ): Promise<T> {
+    requireLocalPath(filePath);
+    const info = await stat(filePath);
+    if (!info.isFile()) throw new ConfigError('Укажите путь к файлу, а не к папке.');
+    const maxBytes = 20 * 1024 * 1024;
+    if (info.size > maxBytes) throw new ConfigError('Файл больше 20 МиБ — предел загрузки панели.');
+    const data = await readFile(filePath);
+    if (data.length > maxBytes) throw new ConfigError('Файл больше 20 МиБ — предел загрузки панели.');
+
+    const form = new FormData();
+    const mediaTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+      '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+      '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+      '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json',
+    };
+    form.append('file', new Blob([data], { type: contentType || mediaTypes[extname(filePath).toLowerCase()] || 'application/octet-stream' }), basename(filePath));
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+    return this.post<T>(path, form);
+  }
+
+  /** Сохраняет ответ файлом; существующий файл никогда не перезаписывает. */
+  async download(
+    path: string,
+    destination: string,
+    query?: Query,
+  ): Promise<{ path: string; bytes: number; content_type: string }> {
+    requireLocalPath(destination);
+    const response = await this.request('GET', path, { query });
+    let data: Uint8Array;
+    try {
+      data = await parseBytes(response);
+    } catch (error) {
+      throw enrich(error);
+    }
+    await writeFile(destination, data, { flag: 'wx', mode: 0o600 });
+    return { path: destination, bytes: data.length,
+      content_type: response.headers.get('content-type') ?? 'application/octet-stream' };
   }
 
   /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */
@@ -90,6 +139,13 @@ export class OperbotsApi {
       ...(options.body === undefined ? {} : { body: options.body }),
       timeoutMs: this.config.timeoutMs,
     });
+  }
+}
+
+export function requireLocalPath(path: string): void {
+  if (!isAbsolute(path) || /^[\\/]{2}/.test(path) ||
+      (process.platform === 'win32' && !/^[a-z]:[\\/]/i.test(path))) {
+    throw new ConfigError('Укажите абсолютный локальный путь к обычному файлу; UNC и device пути не поддерживаются.');
   }
 }
 

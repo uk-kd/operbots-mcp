@@ -3,8 +3,9 @@
 [![npm](https://img.shields.io/npm/v/operbots-mcp)](https://www.npmjs.com/package/operbots-mcp)
 
 MCP-сервер панели [operbots](https://github.com/uk-kd/operbots). Даёт Claude Code
-и другим клиентам MCP работать с делами, ботами Telegram и MAX, сценариями на полотне,
-маркетом готовых сценариев, перепиской, рассылками, базой знаний и подключениями к ИИ.
+и другим клиентам MCP работать со всеми разделами панели: делами, ботами Telegram и MAX,
+сценариями, маркетом, перепиской, заявками, контрагентами, рассылками, базой знаний,
+ИИ-сервисами, расширениями и уведомлениями.
 
 **Права те же, что у вас.** Токен опознаёт вашу учётную запись, и панель применяет
 к запросам те же проверки ролей и прав по делам. Выдать помощнику больше, чем
@@ -79,9 +80,16 @@ codex plugin add operbots-mcp@operbots
 
 ## Доступ
 
-Пароль сервер не видит и не хранит: на диск ложится только токен —
-`~/.operbots/credentials.json` с правами 600. В самой панели значения тоже нет,
+Для входа хранится только токен — `~/.operbots/credentials.json` с правами 600.
+В самой панели значения тоже нет,
 там лежит лишь его отпечаток, поэтому даже из базы токен не восстановить.
+
+Вход выполняется через терминал (`operbots-mcp login`) или через `operbots_login`
+с абсолютным путём `token_file`. `account_password` читает явно указанный локальный
+JSON-файл `password_file` с полями `current_password` и `new_password`; пароль
+не сохраняется в профиле. Файлы с секретами удалите после использования.
+Пароли и токены не запрашиваются через формы MCP: это запрещает
+[спецификация elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation).
 
 Отозвать доступ — в панели, аккаунт → Интеграции. Отзыв действует сразу и только
 для этого токена: остальные машины продолжают работать. Команда
@@ -104,7 +112,7 @@ codex plugin add operbots-mcp@operbots
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_TOKEN` | Токен вместо сохранённого файла: контейнер, сборка |
 | `OPERBOTS_CASE` | Дело по умолчанию: короткое имя, название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 31 вместо 82; вход и выход остаются |
+| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 56 вместо 143; вход и выход остаются |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
 | `OPERBOTS_TIMEOUT_MS` | Сколько ждать ответ панели. По умолчанию 30000 |
 | `OPERBOTS_INSECURE_TLS=1` | Не проверять сертификат — для самоподписанного TLS |
@@ -113,32 +121,64 @@ codex plugin add operbots-mcp@operbots
 
 ## Инструменты
 
-82 штуки. Дела, ботов, сценарии, публикации маркета, материалы, заготовки, рассылки и
+143 инструмента. Дела, ботов, сценарии, публикации маркета, материалы, заготовки, рассылки и
 подключения можно называть по имени — идентификаторы не нужны:
 `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
+При одинаковых названиях инструмент просит UUID из списка. Поиск диалога по номеру
+чата ограничен 1000 записями; поиск по имени отказывает при неполной странице.
+В делах с более чем 100 рассылками используйте их UUID. Неполная выборка не считается
+доказательством однозначного совпадения.
+
 | Раздел | Инструменты |
 | --- | --- |
-| **Аккаунт** | `operbots_login`, `operbots_logout`, `whoami`, `sessions_list`, `sessions_revoke`, `account_update` |
-| **Дела** | `cases_list`, `cases_get`, `cases_save`, `cases_delete`, `cases_leave`, `audit_list` |
-| **Люди** | `members_list`, `members_save`, `members_remove`, `case_transfer`, `roles_save`, `roles_delete`, `invites_create`, `invites_revoke` |
-| **Боты** | `bots_list`, `bots_get`, `bots_journal`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_check`, `bots_webhook_rotate`, `bots_delete` |
+| **Аккаунт** | `operbots_login`, `operbots_logout`, `whoami`, `sessions_list`, `sessions_revoke`, `account_update`, `account_appearance`, `account_password`, `account_security`, `users_search` |
+| **Дела** | `cases_list`, `cases_get`, `cases_save`, `cases_delete`, `cases_leave`, `audit_list`, `audit_filters` |
+| **Люди** | `members_list`, `members_save`, `members_remove`, `case_transfer`, `roles_save`, `roles_delete`, `invites_create`, `invites_get`, `invites_accept`, `invites_revoke` |
+| **Боты** | `bots_list`, `bots_get`, `bots_status`, `bots_webhook_info`, `bots_journal`, `bots_save`, `bots_control`, `bots_commands_apply`, `bots_variables_set`, `bots_reveal_token`, `bots_webhook_check`, `bots_webhook_rotate`, `bots_detach`, `bots_delete` |
 | **Сценарии** | `flows_list`, `flows_get`, `flows_save`, `flows_publish`, `flows_versions`, `flows_restore`, `flows_simulate`, `flows_export`, `flows_import`, `flows_delete` |
 | **Маркет** | `market_list`, `market_get`, `market_like`, `market_install`, `market_publish`, `market_release`, `market_update`, `market_unpublish` |
-| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_history`, `dialogs_export`, `dialogs_reply`, `dialogs_edit_message`, `dialogs_delete_message`, `dialogs_update`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
+| **Диалоги** | `dialogs_list`, `dialogs_get`, `dialogs_chat_info`, `dialogs_history`, `dialogs_mark_read`, `dialogs_export`, `dialogs_reply`, `dialogs_reply_file`, `dialogs_download_attachment`, `dialogs_edit_message`, `dialogs_delete_message`, `dialogs_update`, `dialogs_release`, `dialogs_forget_memory`, `dialogs_cancel_scheduled`, `dialogs_reset_stage`, `dialogs_delete`, `tasks_list`, `tasks_cancel` |
+| **Заявки** | `requests_list`, `requests_get`, `requests_save`, `requests_delete`, `requests_types_list`, `requests_types_save`, `requests_types_delete`, `requests_tasks_list`, `requests_task_complete`, `requests_comment`, `requests_workflow`, `requests_cancel` |
+| **Контрагенты** | `counterparties_list`, `counterparties_get`, `counterparties_save`, `counterparties_delete`, `counterparties_settings`, `counterparties_settings_save`, `counterparties_dialogs`, `counterparties_link`, `counterparties_unlink`, `counterparties_reconcile` |
 | **Заготовки ответов** | `replies_list`, `replies_save`, `replies_delete` |
-| **Рассылки** | `broadcasts_list`, `broadcasts_preview`, `broadcasts_save`, `broadcasts_start`, `broadcasts_cancel` |
+| **Рассылки** | `broadcasts_list`, `broadcasts_get`, `broadcasts_targets`, `broadcasts_attach`, `broadcasts_detach`, `broadcasts_preview`, `broadcasts_save`, `broadcasts_duplicate`, `broadcasts_retry`, `broadcasts_test`, `broadcasts_delete`, `broadcasts_start`, `broadcasts_cancel` |
 | **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_document`, `knowledge_document_update`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
-| **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_test`, `ai_delete` |
+| **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_usage`, `ai_test`, `ai_delete` |
+| **Расширения** | `extensions_list`, `extensions_get`, `extensions_templates`, `extensions_nodes`, `extensions_save`, `extensions_oauth_begin`, `extensions_delete` |
+| **Уведомления** | `notifications_list`, `notifications_summary`, `notifications_filters`, `notifications_read`, `notifications_settings`, `notifications_settings_save` |
 | **Справочники** | `operbots_catalog` — платформы с их пределами, виды узлов с настройками, разделы маркета, виды ИИ-сервисов, права |
 
-Двадцать помечены необратимыми — клиент спросит разрешение. Удаление дела, бота,
+31 инструмент помечен `danger`: клиент получает подсказку об опасном действии. Удаление дела, бота,
 сценария, диалога и базы знаний целиком, передача дела другому владельцу и запуск
 рассылки требуют вдобавок названия дословно: случайный вызов не сотрёт и не разошлёт.
 
-Режим `OPERBOTS_READ_ONLY=1` оставляет 31 инструмент: всё чтение плюс `operbots_login`
+Режим `OPERBOTS_READ_ONLY=1` оставляет 56 инструментов: всё чтение плюс `operbots_login`
 и `operbots_logout` — они правят не панель, а токен на этой машине, и без них человек
 с отозванным токеном остался бы с советом войти и без способа это сделать.
+
+Чтение истории не сбрасывает непрочитанные сообщения; для этого есть `dialogs_mark_read`.
+`knowledge_search`, `ai_test` и `flows_simulate` могут обращаться к настоящему ИИ-сервису
+и расходовать его лимиты, поэтому в режиме чтения недоступны.
+
+### Заявки и контрагенты
+
+Карточки возвращают все поля, задачи, историю и доступные действия. Для изменения
+заявки передавайте актуальный `revision`, для типа — `version`; конфликт возвращается
+клиенту без скрытого повторения операции. Перенос диалога из другой карточки требует
+`replace_counterparty_id` прежнего контрагента: конкурентная перепривязка не затирается.
+Настройки автосопоставления сохраняют пропущенные поля.
+
+### Расширения и уведомления
+
+Расширения поддерживают авторизацию, операции, входные параметры, вебхуки и начало
+OAuth-подключения. Частичная правка сохраняет пропущенные поля и идентификаторы
+операций; переданный массив заменяет соответствующий список целиком. Пустые секреты
+сохраняют прежние значения, `clear_secrets` явно удаляет их.
+
+Уведомления по умолчанию показываются по всем делам. Фильтр `case` ограничивает ленту
+только при явной передаче. Настройки видов уведомлений объединяются с текущими;
+`replace=true` заменяет карту полностью.
 
 ### Маркет
 
@@ -163,8 +203,9 @@ codex plugin add operbots-mcp@operbots
 ### Сообщества
 
 Группы и каналы, где состоит бот, — это те же диалоги: `dialogs_list kind=community`
-показывает их, `kind=private` — только личную переписку, а `dialogs_get` у сообщества
-вдобавок спрашивает платформу о нём: участники, ссылка, положение бота. У сценария есть
+показывает их, `kind=private` — только личную переписку. `dialogs_get` читает сохранённую
+карточку; `dialogs_chat_info` спрашивает платформу о сообществе и обновляет название
+и положение бота. Поэтому сверка недоступна в режиме чтения. У сценария есть
 вид — `dialog` для личной переписки и `community` для сообществ; у бота по одному
 включённому на вид, и какой ведёт разговор, решает вид чата. Вид задают в `flows_save
 scope=…`, узлы под него — `operbots_catalog what=node_kinds scope=community`: вход и
@@ -183,27 +224,29 @@ scope=…`, узлы под него — `operbots_catalog what=node_kinds scope
 собеседников бота, а забытое условие выглядит ровно так же — потому предпросмотр и
 стоит смотреть всегда.
 
-Условий семь: кто ведёт разговор, метки, метки-исключения, назначенный участник,
-молчание дольше стольких дней, язык и «без получателей прошлой рассылки». Восьмого —
-«пришли не раньше такого-то дня» — здесь нет: панель его объявляет, но отвечает на
-него внутренней ошибкой, и вернуть его можно будет вместе с починкой панели.
+Условий восемь: кто ведёт разговор, метки, метки-исключения, назначенный участник,
+молчание дольше стольких дней, язык, «без получателей прошлой рассылки» и дата
+начала общения (`joined_after`). Их можно передать в `audience`; `audience={}`
+снимает все условия. `broadcasts_targets` показывает состояния доставки,
+`broadcasts_retry` повторяет неудачные отправки, `broadcasts_test` отправляет одному
+явно выбранному диалогу. Повтор и тестовая отправка также требуют подтверждения.
 
-### Что не выведено
+### Файлы и границы доступа
 
-Наружу намеренно не выведены регистрация и смена пароля, выпуск и отзыв токенов, выход
-на всех устройствах, оформление панели, поиск людей по установке, служебные вебхуки
-платформ и живая лента событий.
+`dialogs_reply_file` и `broadcasts_attach` читают явно указанный абсолютный локальный
+путь (до 20 МиБ). MIME определяется по расширению либо задаётся `content_type`.
+Сетевые UNC-пути и Windows device пути не принимаются.
+`dialogs_download_attachment` скачивает вложение в абсолютный `destination`,
+не перезаписывая существующий файл. `dialogs_export` выгружает текст переписки.
+Материал базы знаний с `source=file` принимает уже извлечённый текст: backend
+не имеет маршрута загрузки бинарного документа.
 
-Файлы MCP не передаёт, поэтому вложения остаются делом панели: отправить картинку в
-разговор, приложить файл к рассылке и скачать присланное отсюда нельзя. Текстовая
-выгрузка переписки при этом есть — `dialogs_export`.
-
-Уведомления не выведены сознательно: лента личная и сквозная по делам, а то, что в ней
-пишут, целиком повторяют журнал бота (`bots_journal`) и журнал дела (`audit_list`) —
-оба уже здесь. Ради самой ленты понадобилось бы четыре инструмента, из которых
-единственный по-настоящему действующий гасил бы человеку счётчик непрочитанного.
-
-Расход на модели (`/ai-usage` в панели) пока не выведен — это отставание, а не решение.
+Выпуск и отзыв интеграционных токенов, настройка 2FA и коды восстановления требуют
+браузерной сессии: backend не разрешает их по интеграционному токену. `account_security`
+возвращает прямые ссылки на соответствующие вкладки аккаунта. Регистрация, вход с
+паролем/2FA, обновление браузерной сессии, OAuth callback, входящие вебхуки платформ
+и WebSocket используют свои протоколы; MCP не выдаёт их за доступные операции токена.
+`sessions_revoke all=true` завершает браузерные сессии на всех устройствах.
 
 Значения секретных переменных бота панель отдаёт открыто, а сервер скрывает — видно
 только имя.
@@ -225,9 +268,10 @@ scope=…`, узлы под него — `operbots_catalog what=node_kinds scope
     to: hello
 ```
 
-Правка заменяет граф целиком: сначала `flows_get`, затем `flows_save` со всеми
-узлами. Размеры и положение карты переносятся из текущей редакции, поэтому правка
-одного узла не сбивает вид полотна. Состав `config` — в `operbots_catalog
+Переданные `nodes`, `edges` и `comments` заменяют свой список целиком;
+пропущенные списки сохраняются. Сначала `flows_get`, затем `flows_save` с нужными
+списками. Размеры, координаты, оформление узлов и связей, комментарии и viewport
+сохраняются, если не передать их явно. Состав `config` — в `operbots_catalog
 what=node_kinds`; узлы у платформ одни и те же, а варианты в их настройках разные,
 поэтому передавайте `platform` — иначе в граф попадёт вариант, которого у платформы
 бота нет.

@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 
-import type { Context } from '../context.js';
+import { pickByName, type Context } from '../context.js';
 import { ApiError } from '../errors.js';
 import { report } from '../format.js';
 import { caseField, body, tool, type Tool } from './kit.js';
@@ -16,6 +16,7 @@ import { findProvider } from './bots.js';
 
 interface Base {
   id: string;
+  case_id: string;
   name: string;
   description: string | null;
   provider_id: string | null;
@@ -28,10 +29,14 @@ interface Base {
   documents_count: number;
   chunks_count: number;
   ready_count: number;
+  created_at: string;
+  updated_at: string;
+  created_by: Record<string, unknown> | null;
 }
 
 interface Document {
   id: string;
+  base_id: string;
   title: string;
   source: string;
   source_url: string | null;
@@ -41,6 +46,7 @@ interface Document {
   chars: number;
   indexed_at: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 interface DocumentDetail extends Document {
@@ -55,45 +61,19 @@ async function findDocument(
   hint: string,
 ): Promise<Document> {
   const list = await ctx.api.get<Document[]>(`/cases/${caseId}/knowledge/${baseId}/documents`);
-  const needle = hint.trim().toLowerCase();
-
-  const match =
-    list.find((item) => item.id === hint) ??
-    list.find((item) => item.title.toLowerCase() === needle) ??
-    list.find((item) => item.title.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'document_not_found',
-      `Материала «${hint}» в базе нет. Есть: ${list.map((item) => item.title).join(', ') || 'ни одного'}`,
-    );
-  }
-  return match;
+  return list.find((item) => item.id === hint.trim())
+    ?? pickByName(list.map((item) => ({ ...item, name: item.title })), hint);
 }
 
 export async function findBase(ctx: Context, caseId: string, hint: string): Promise<Base> {
   const list = await ctx.api.get<Base[]>(`/cases/${caseId}/knowledge`);
-  const needle = hint.trim().toLowerCase();
-
-  const match =
-    list.find((item) => item.id === hint) ??
-    list.find((item) => item.name.toLowerCase() === needle) ??
-    list.find((item) => item.name.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'base_not_found',
-      `Базы знаний «${hint}» нет в деле. Есть: ${list.map((item) => item.name).join(', ') || 'ни одной'}`,
-    );
-  }
-  return match;
+  return list.find((item) => item.id === hint.trim()) ?? pickByName(list, hint);
 }
 
 const showBase = (base: Base) => ({
   база: base.name,
   идентификатор: base.id,
+  дело: base.case_id,
   описание: base.description,
   включена: base.is_active,
   подключение_ии: base.provider_id,
@@ -105,6 +85,9 @@ const showBase = (base: Base) => ({
   нахлёст: base.chunk_overlap,
   фрагментов_в_ответе: base.top_k,
   порог_близости: base.min_score,
+  создана: base.created_at,
+  обновлена: base.updated_at,
+  создал: base.created_by,
 });
 
 export const knowledgeTools: Tool[] = [
@@ -140,12 +123,15 @@ export const knowledgeTools: Tool[] = [
             : documents.map((item) => ({
                 материал: item.title,
                 идентификатор: item.id,
+                база: item.base_id,
                 откуда: item.source_url ?? item.source,
                 состояние: item.status,
                 ошибка: item.error,
                 фрагментов: item.chunks_count,
                 символов: item.chars,
                 разобран: item.indexed_at,
+                создан: item.created_at,
+                обновлён: item.updated_at,
               })),
       });
     },
@@ -164,7 +150,7 @@ export const knowledgeTools: Tool[] = [
       case: caseField,
       base: z.string().optional().describe('Какую базу менять. Не указывайте, чтобы создать новую.'),
       name: z.string().min(1).max(120).optional().describe('Название базы.'),
-      description: z.string().max(2000).optional().describe('Для чего она.'),
+      description: z.string().max(2000).nullable().optional().describe('Для чего она. null — стереть.'),
       provider: z
         .string()
         .nullable()
@@ -253,13 +239,14 @@ export const knowledgeTools: Tool[] = [
     title: 'Добавить материал',
     kind: 'write',
     description:
-      'Кладёт в базу текст или страницу по ссылке. Разбор идёт в фоне: сразу после добавления ' +
+      'Кладёт в базу текст, извлечённый текст файла (source=file) или страницу по ссылке. Разбор идёт в фоне: сразу после добавления ' +
       'материал в состоянии pending, проверьте его позже через knowledge_list. Повторный вызов ' +
       'создаёт дубликат, а не обновляет прежний материал.',
     input: {
       case: caseField,
       base: z.string().describe('База знаний: название или идентификатор.'),
       title: z.string().max(240).optional().describe('Название материала.'),
+      source: z.enum(['text', 'url', 'file']).optional().describe('Источник материала. Для file передайте извлечённый текст в text; без source вид определяется по url.'),
       text: z.string().optional().describe('Текст материала. Нужен, если ссылка не задана.'),
       url: z
         .string()
@@ -271,13 +258,20 @@ export const knowledgeTools: Tool[] = [
       const found = await ctx.resolveCase(args.case);
       const base = await findBase(ctx, found.id, args.base);
 
-      if (!args.text && !args.url) return 'Нужен либо текст материала, либо ссылка на страницу.';
+      const source = args.source ?? (args.url ? 'url' : 'text');
+      if (source === 'url' ? !args.url : !args.text?.trim()) {
+        throw new ApiError(400, 'content_required', source === 'url'
+          ? 'Для материала-ссылки нужен url.' : 'Для текстового материала или файла нужен извлечённый текст.');
+      }
+      if (args.source && source !== 'url' && args.url) {
+        throw new ApiError(400, 'source_conflict', 'Ссылку url можно передать только для source=url.');
+      }
 
       const document = await ctx.api.post<Document>(
         `/cases/${found.id}/knowledge/${base.id}/documents`,
         body({
           title: args.title,
-          source: args.url ? 'url' : 'text',
+          source,
           content: args.text ?? '',
           url: args.url,
         }),
@@ -286,6 +280,7 @@ export const knowledgeTools: Tool[] = [
       return report(`Материал добавлен в базу «${base.name}».`, {
         материал: document.title,
         идентификатор: document.id,
+        база: document.base_id,
         состояние: document.status,
         подсказка: 'Разбор идёт в фоне — проверьте состояние через knowledge_list.',
       });
@@ -321,12 +316,15 @@ export const knowledgeTools: Tool[] = [
       return report(`Материал «${document.title}» из базы «${base.name}»`, {
         материал: document.title,
         идентификатор: document.id,
+        база: document.base_id,
         откуда: document.source_url ?? document.source,
         состояние: document.status,
         ошибка: document.error,
         символов: document.chars,
         фрагментов: document.chunks_count,
         разобран: document.indexed_at,
+        создан: document.created_at,
+        обновлён: document.updated_at,
         текст: document.content,
         ...(args.chunks
           ? {
@@ -362,6 +360,9 @@ export const knowledgeTools: Tool[] = [
         .describe('Перечитать страницу по ссылке. Только для материала-ссылки.'),
     },
     async run(args, ctx) {
+      if (args.refetch && (args.title !== undefined || args.text !== undefined)) {
+        throw new ApiError(400, 'refetch_conflict', 'refetch нельзя совмещать с title или text: перечитайте страницу отдельным вызовом.');
+      }
       const found = await ctx.resolveCase(args.case);
       const base = await findBase(ctx, found.id, args.base);
       const brief = await findDocument(ctx, found.id, base.id, args.document);
@@ -425,11 +426,12 @@ export const knowledgeTools: Tool[] = [
   tool({
     name: 'knowledge_search',
     title: 'Проверить поиск по базе',
-    kind: 'read',
+    kind: 'write',
     description:
       'Показывает, какие фрагменты база подставит модели в ответ на такой вопрос. Так проверяют, ' +
       'что материалы разобраны и порог близости выбран верно. Если база выключена или векторы ' +
-      'не считаются, ответ будет пустым без ошибки.',
+      'не считаются, ответ будет пустым без ошибки. Поиск вызывает внешний ИИ-сервис для ' +
+      'векторизации вопроса и записывает расход; он может оплачиваться отдельно.',
     input: {
       case: caseField,
       base: z.string().describe('База знаний: название или идентификатор.'),

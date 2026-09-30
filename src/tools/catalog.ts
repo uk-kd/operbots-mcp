@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 import { BOT_PLATFORMS, FLOW_SCOPES } from '../enums.js';
 import { report } from '../format.js';
-import { tool, type Tool } from './kit.js';
+import { caseField, optional, tool, type Tool } from './kit.js';
 
 interface NodeType {
   kind: string;
@@ -19,6 +19,11 @@ interface NodeType {
   inputs: number;
   outputs: string[];
   config_schema: Record<string, unknown>[];
+  scopes?: string[];
+  enabled?: boolean;
+  extension_id?: string;
+  operation_id?: string;
+  event_id?: string;
 }
 
 interface AIKind {
@@ -73,6 +78,7 @@ export const catalogTools: Tool[] = [
       'одни и те же, а варианты в их настройках разные (у MAX нет разметки MarkdownV2 и ' +
       'голосового среди вложений).',
     input: {
+      case: caseField.describe('Для node_kinds: дело с настроенными расширениями.'),
       what: z
         .enum(['platforms', 'node_kinds', 'market_categories', 'ai_kinds', 'permissions'])
         .describe('Какой справочник показать.'),
@@ -122,15 +128,26 @@ export const catalogTools: Tool[] = [
         }
 
         case 'node_kinds': {
-          const list = await ctx.api.get<NodeType[]>('/flow-nodes', {
+          const native = await ctx.api.get<NodeType[]>('/flow-nodes', {
             platform: args.platform,
             scope: args.scope,
           });
+          const found = args.case === undefined
+            ? await optional(ctx.resolveCase()) : await ctx.resolveCase(args.case);
+          const extensions = typeof found === 'string' ? found : await optional(
+            ctx.api.get<NodeType[]>(`/cases/${found.id}/extensions/nodes`),
+          );
+          const list = [...native, ...(typeof extensions === 'string' ? [] : extensions)]
+            .filter(item => !args.scope || !item.scopes || item.scopes.includes(args.scope));
           const wanted = args.kind
             ? list.filter((item) => item.kind === args.kind || item.kind.includes(args.kind ?? ''))
             : list;
 
           if (wanted.length === 0) {
+            if (typeof extensions === 'string') {
+              return `В доступной части каталога узел «${args.kind}» не найден. ` +
+                `Расширения дела: ${extensions}`;
+            }
             return `Узла «${args.kind}» нет. Есть: ${list.map((item) => item.kind).join(', ')}`;
           }
 
@@ -138,12 +155,19 @@ export const catalogTools: Tool[] = [
           // каталог с ним занимает несколько экранов и мешает читать.
           const detailed = Boolean(args.kind) || wanted.length <= 3;
           return report(
-            `Видов узлов: ${wanted.length}`,
+            `Видов узлов: ${wanted.length}` +
+              (typeof extensions === 'string' ? `. Расширения дела: ${extensions}` : ''),
             wanted.map((item) => ({
               узел: item.kind,
               раздел: item.group,
               название: item.title,
               описание: item.description,
+              входов: item.inputs,
+              виды_сценария: item.scopes,
+              включено: item.enabled,
+              расширение: item.extension_id,
+              операция: item.operation_id,
+              событие: item.event_id,
               выходы: item.outputs.length > 0 ? item.outputs : 'один',
               настройки: detailed
                 ? item.config_schema
