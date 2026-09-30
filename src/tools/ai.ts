@@ -57,9 +57,10 @@ export const aiTools: Tool[] = [
     description:
       'Какие ИИ-сервисы подключены к делу, с какими моделями и сколько ботов их используют. ' +
       'Ключи не показываются — только последние символы.',
-    input: { case: caseField },
+    input: { case: caseField, provider: z.uuid().optional().describe('Идентификатор подключения для полной карточки.') },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
+      if (args.provider) return report('Подключение к ИИ.', await ctx.api.get(`/cases/${found.id}/ai-providers/${args.provider}`));
       const list = await ctx.api.get<Provider[]>(`/cases/${found.id}/ai-providers`);
       return report(`Подключений в деле «${found.name}»: ${list.length}`, list.map(show));
     },
@@ -99,6 +100,7 @@ export const aiTools: Tool[] = [
       base_url: z
         .string()
         .max(400)
+        .nullable()
         .optional()
         .describe('Адрес сервера. Обязателен для вида custom.'),
       credentials: z
@@ -130,6 +132,7 @@ export const aiTools: Tool[] = [
         .optional()
         .describe('Сколько прошлых реплик подмешивать в запрос. По умолчанию 10.'),
       active: z.boolean().optional().describe('Включено ли подключение.'),
+      options: z.record(z.string(), z.unknown()).optional().describe('Настройки памяти, экономии контекста и сервиса. Заменяет карту: memory, summary_every, cache_context и другие поля API.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -144,6 +147,7 @@ export const aiTools: Tool[] = [
         max_tokens: args.max_tokens,
         history_depth: args.history_depth,
         is_active: args.active,
+        options: args.options,
       });
 
       if (!args.provider) {
@@ -176,6 +180,20 @@ export const aiTools: Tool[] = [
         payload,
       );
       return report('Подключение обновлено.', show(updated));
+    },
+  }),
+
+  tool({
+    name: 'ai_usage',
+    title: 'Расход ИИ',
+    kind: 'read',
+    description: 'Полный отчёт расхода с итогами, сравнением, днями и разрезами. provider, bot, kind, model — точные ключи из choices предыдущего ответа, включая удалённые подключения.',
+    input: { case: caseField, days: z.number().int().min(1).max(180).optional(),
+      provider: z.string().optional(), bot: z.string().optional(), kind: z.string().optional(), model: z.string().optional() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const { case: _, ...query } = args;
+      return report('Расход ИИ.', await ctx.api.get(`/cases/${found.id}/ai-usage`, body(query)));
     },
   }),
 

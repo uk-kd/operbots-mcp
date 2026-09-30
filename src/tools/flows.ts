@@ -24,7 +24,7 @@ interface RawNode {
     kind?: string;
     title?: string;
     config?: Record<string, unknown>;
-    /** Цвет узла и прочее оформление полотна — модель их не касается. */
+    /** Цвет узла и прочее оформление полотна. */
     [key: string]: unknown;
   };
   width?: number | null;
@@ -45,6 +45,14 @@ interface RawGraph {
   nodes?: RawNode[];
   edges?: RawEdge[];
   viewport?: { x: number; y: number; zoom: number };
+  comments?: RawComment[];
+}
+
+interface RawComment {
+  id: string;
+  position: { x: number; y: number };
+  text: string;
+  color: string;
 }
 
 /** Чем сценарий связан с маркетом: его выложили или из него поставили. */
@@ -105,7 +113,13 @@ interface Version {
 
 const nodeInput = z.object({
   id: z.string().min(1).max(64).describe('Имя узла внутри сценария, уникальное.'),
-  kind: z.enum(NODE_KINDS).describe('Что делает узел.'),
+  kind: z.union([
+    z.enum(NODE_KINDS),
+    z.enum(['extension.unconfigured', 'extension_trigger.unconfigured']),
+    z.string().regex(
+      /^(extension|extension_trigger)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    ),
+  ]).describe('Вид узла. Операции расширений: extension.UUID или extension_trigger.UUID.'),
   title: z.string().optional().describe('Подпись узла на полотне.'),
   config: z
     .record(z.string(), z.unknown())
@@ -113,7 +127,14 @@ const nodeInput = z.object({
     .describe('Параметры узла. Состав полей смотрите в operbots_catalog what=node_kinds.'),
   x: z.number().optional().describe('Положение на полотне по горизонтали.'),
   y: z.number().optional().describe('Положение на полотне по вертикали.'),
-});
+  type: z.string().optional().describe('Тип карточки полотна; по умолчанию operbots.'),
+  width: z.number().nullable().optional().describe('Ширина карточки; null снимает размер.'),
+  height: z.number().nullable().optional().describe('Высота карточки; null снимает размер.'),
+  data: z.record(z.string(), z.unknown()).refine(
+    value => !['kind', 'title', 'config'].some(key => Object.hasOwn(value, key)),
+    'kind, title и config передаются отдельными полями узла.',
+  ).optional().describe('Оформление карточки целиком. Без data прежнее оформление сохраняется.'),
+}).strict();
 
 const edgeInput = z.object({
   id: z.string().max(96).optional().describe('Имя связи. Если не задать, соберётся само.'),
@@ -121,42 +142,79 @@ const edgeInput = z.object({
   to: z.string().describe('Узел-приёмник.'),
   out: z
     .string()
+    .nullable()
     .optional()
     .describe(
       'Выход узла-источника, если их несколько. Названия латиницей и зависят от вида узла: ' +
         'у условия true и false, у запроса ok и error, у меню — номера кнопок. ' +
         'Полный перечень — в operbots_catalog what=node_kinds, поле «выходы». По умолчанию out.',
     ),
-  label: z.string().optional().describe('Подпись на связи.'),
-});
+  in: z.string().nullable().optional().describe('Вход приёмника; null — стандартный вход.'),
+  label: z.string().nullable().optional().describe('Подпись связи; null снимает её.'),
+  data: z.record(z.string(), z.unknown()).optional()
+    .describe('Оформление связи целиком. Без data прежнее оформление сохраняется.'),
+}).strict();
+
+const commentInput = z.object({
+  id: z.string().min(1).max(64),
+  text: z.string().max(10000).optional(),
+  color: z.enum(['signal', 'sky', 'violet', 'amber', 'emerald', 'rose', 'slate']).optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+}).strict();
+const graphInput = {
+  nodes: z.array(nodeInput).max(2000).optional().describe('Заменить список узлов целиком.'),
+  edges: z.array(edgeInput).max(4000).optional().describe('Заменить список связей целиком.'),
+  comments: z.array(commentInput).max(500).refine(
+    comments => new Set(comments.map(comment => comment.id)).size === comments.length,
+    'Идентификаторы комментариев должны быть уникальными.',
+  ).optional().describe('Комментарии полотна целиком. [] удаляет все; без поля сохраняются.'),
+  viewport: z.object({ x: z.number(), y: z.number(), zoom: z.number() }).strict().optional()
+    .describe('Положение полотна. Без поля сохраняется прежнее.'),
+};
 
 type NodeInput = z.infer<typeof nodeInput>;
 type EdgeInput = z.infer<typeof edgeInput>;
+type GraphInput = z.infer<z.ZodObject<typeof graphInput>>;
 
 /** Плоское представление графа — то, что видит и присылает модель. */
 function flatten(graph: RawGraph) {
   return {
-    nodes: (graph.nodes ?? []).map((node) => ({
-      id: node.id,
-      kind: node.data?.kind ?? 'неизвестно',
-      title: node.data?.title || undefined,
-      // Настройки уходят дословно: маска вывода превратила бы ключ
-      // сервиса в «···1234», и следующий flows_save записал бы её в
-      // сценарий вместо ключа.
-      config:
-        node.data?.config && Object.keys(node.data.config).length > 0
-          ? raw(node.data.config)
-          : undefined,
-      x: node.position?.x ?? 0,
-      y: node.position?.y ?? 0,
-    })),
+    nodes: (graph.nodes ?? []).map((node) => {
+      const { kind: _kind, title: _title, config: _config, ...data } = node.data ?? {};
+      return {
+        id: node.id,
+        type: node.type,
+        kind: node.data?.kind ?? 'неизвестно',
+        title: node.data?.title || undefined,
+        // Настройки уходят дословно: маска вывода превратила бы ключ
+        // сервиса в «···1234», и следующий flows_save записал бы её в
+        // сценарий вместо ключа.
+        config:
+          node.data?.config && Object.keys(node.data.config).length > 0
+            ? raw(node.data.config)
+            : undefined,
+        x: node.position?.x ?? 0,
+        y: node.position?.y ?? 0,
+        width: node.width,
+        height: node.height,
+        data: raw(data),
+      };
+    }),
     edges: (graph.edges ?? []).map((edge) => ({
       id: edge.id,
       from: edge.source,
       to: edge.target,
       out: edge.sourceHandle ?? undefined,
+      in: edge.targetHandle,
       label: edge.label ?? undefined,
+      data: raw(edge.data ?? {}),
     })),
+    comments: (graph.comments ?? []).map(comment => ({
+      id: comment.id, text: comment.text, color: comment.color,
+      x: comment.position.x, y: comment.position.y,
+    })),
+    viewport: graph.viewport,
   };
 }
 
@@ -200,56 +258,66 @@ function refuseMasked(nodes: NodeInput[]): void {
 }
 
 /**
- * Собирает граф в формате полотна. Размеры узлов, положение карты и всё
- * оформление — цвет узла, цвет и вид связи — берутся из текущей редакции:
- * панель их рисует, а модель о них не знает и прислать не может. Поэтому
- * прежнее `data` переносится целиком, а поверх ложится только то, чем
- * модель распоряжается: вид узла, подпись и настройки.
+ * Собирает граф в формате полотна. Пропущенные поля сохраняются из текущей
+ * редакции. Переданное data целиком заменяет оформление; вид узла, подпись
+ * и настройки задаются отдельно.
  */
-function build(nodes: NodeInput[], edges: EdgeInput[], previous?: RawGraph): RawGraph {
-  refuseMasked(nodes);
+function build(args: GraphInput, previous?: RawGraph): RawGraph {
   const sizes = new Map((previous?.nodes ?? []).map((node) => [node.id, node]));
   const before = new Map((previous?.edges ?? []).map((edge) => [edge.id, edge]));
+  const notes = new Map((previous?.comments ?? []).map(comment => [comment.id, comment]));
 
   return {
-    nodes: nodes.map((node, index) => {
+    nodes: args.nodes?.map((node, index) => {
       const old = sizes.get(node.id);
       return {
         id: node.id,
-        type: old?.type ?? 'operbots',
+        type: node.type ?? old?.type ?? 'operbots',
         position: {
           x: node.x ?? old?.position?.x ?? 80 + (index % 4) * 280,
           y: node.y ?? old?.position?.y ?? 80 + Math.floor(index / 4) * 200,
         },
         data: {
-          ...(old?.data ?? {}),
+          ...(node.data ?? old?.data ?? {}),
           kind: node.kind,
           title: node.title ?? old?.data?.title ?? '',
           config: node.config ?? old?.data?.config ?? {},
         },
-        ...(old?.width ? { width: old.width } : {}),
-        ...(old?.height ? { height: old.height } : {}),
+        ...body({
+          width: node.width === undefined ? old?.width : node.width,
+          height: node.height === undefined ? old?.height : node.height,
+        }),
       };
-    }),
-    edges: edges.map((edge) => {
+    }) ?? previous?.nodes ?? [],
+    edges: args.edges?.map((edge: EdgeInput) => {
       const id = edge.id ?? `${edge.from}->${edge.to}${edge.out ? `:${edge.out}` : ''}`;
-      const label = edge.label ?? null;
+      const old = before.get(id);
+      const label = edge.label === undefined ? old?.label ?? null : edge.label;
       // Подпись панель держит в двух местах сразу, и рассинхрон видно
       // глазом: на связи одно, в её настройках другое.
-      const data = { ...(before.get(id)?.data ?? {}) };
+      const data = { ...(edge.data ?? old?.data ?? {}) };
       if (label === null) delete data.label;
       else data.label = label;
       return {
         id,
         source: edge.from,
         target: edge.to,
-        sourceHandle: edge.out ?? null,
-        targetHandle: null,
+        sourceHandle: edge.out === undefined ? old?.sourceHandle ?? null : edge.out,
+        targetHandle: edge.in === undefined ? old?.targetHandle ?? null : edge.in,
         label,
         data,
       };
-    }),
-    viewport: previous?.viewport ?? { x: 0, y: 0, zoom: 1 },
+    }) ?? previous?.edges ?? [],
+    comments: args.comments?.map(comment => {
+      const old = notes.get(comment.id);
+      return {
+        id: comment.id,
+        text: comment.text ?? old?.text ?? '',
+        color: comment.color ?? old?.color ?? 'amber',
+        position: { x: comment.x ?? old?.position.x ?? 0, y: comment.y ?? old?.position.y ?? 0 },
+      };
+    }) ?? previous?.comments ?? [],
+    viewport: args.viewport ?? previous?.viewport ?? { x: 0, y: 0, zoom: 1 },
   };
 }
 
@@ -285,6 +353,8 @@ export function showFlow(flow: Flow, withGraph: boolean) {
     маркет: marketNote(flow.market),
     узлы: withGraph ? flat.nodes : undefined,
     связи: withGraph ? flat.edges : undefined,
+    комментарии: withGraph ? flat.comments : undefined,
+    полотно: withGraph ? flat.viewport : undefined,
   };
 }
 
@@ -402,7 +472,8 @@ export const flowTools: Tool[] = [
       'Без параметра flow создаёт сценарий — пустой, из переданного графа или копией другого ' +
       '(copy_of). С параметром flow перезаписывает его. Граф передаётся ЦЕЛИКОМ: чтобы ' +
       'поправить один узел, сначала прочитайте сценарий через flows_get и пришлите изменённый ' +
-      'список полностью. Новая редакция создаётся, только если граф действительно изменился. ' +
+      'список полностью. Не переданные nodes/edges/comments/viewport сохраняются. ' +
+      'Новая редакция создаётся, только если граф действительно изменился. ' +
       'Готовые сценарии — «Консультант с ИИ», «Заявка», «Запись на визит» и другие — здесь не ' +
       'создаются: их ставят из маркета через market_install. ' +
       'Сохранение не включает сценарий в работу — для этого есть flows_publish.',
@@ -418,7 +489,7 @@ export const flowTools: Tool[] = [
             'без него будет «… — копия».',
         ),
       name: z.string().min(1).max(120).optional().describe('Название сценария.'),
-      description: z.string().max(2000).optional().describe('Описание.'),
+      description: z.string().max(2000).nullable().optional().describe('Описание.'),
       scope: z
         .enum(FLOW_SCOPES)
         .optional()
@@ -429,11 +500,29 @@ export const flowTools: Tool[] = [
             'dialog; каталог под вид — operbots_catalog what=node_kinds scope=…. Сменить вид ' +
             'можно только у выключенного сценария.',
         ),
-      nodes: z.array(nodeInput).optional().describe('Узлы сценария целиком.'),
-      edges: z.array(edgeInput).optional().describe('Связи между узлами целиком.'),
-      comment: z.string().max(240).optional().describe('Комментарий к редакции.'),
+      ...graphInput,
+      comment: z.string().max(240).nullable().optional().describe('Комментарий к редакции.'),
+      template: z.string().nullable().optional().describe('Устаревшее поле создания: blank.'),
+      provider_id: z.string().uuid().nullable().optional()
+        .describe('Устаревшее поле создания: ID ИИ-сервиса. Текущая панель не использует его.'),
+      knowledge_base_id: z.string().uuid().nullable().optional()
+        .describe('Устаревшее поле создания: ID базы знаний. Текущая панель не использует его.'),
     },
     async run(args, ctx) {
+      if (args.flow && args.copy_of) {
+        throw new ApiError(400, 'invalid_input', 'flow и copy_of нельзя передавать вместе.');
+      }
+      if ((args.flow || args.copy_of) &&
+          [args.template, args.provider_id, args.knowledge_base_id].some(value => value !== undefined)) {
+        throw new ApiError(400, 'invalid_input',
+          'template, provider_id и knowledge_base_id допустимы только при создании без copy_of.');
+      }
+      if (!args.flow && !args.copy_of && args.comment !== undefined) {
+        throw new ApiError(400, 'invalid_input', 'comment — поле редакции существующего сценария.');
+      }
+      refuseMasked(args.nodes ?? []);
+      const graphChanged = [args.nodes, args.edges, args.comments, args.viewport]
+        .some(value => value !== undefined);
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
 
       if (args.copy_of && !args.flow) {
@@ -444,15 +533,18 @@ export const flowTools: Tool[] = [
           `${source.root}/${source.flowId}/duplicate`,
           body({ name: args.name }),
         );
-        const renamed = args.description
-          ? await ctx.api.put<Flow>(`${root}/${copy.id}`, body({ description: args.description }))
-          : copy;
+        const patch = body({
+          description: args.description, scope: args.scope, comment: args.comment,
+          graph: graphChanged ? build(args, copy.graph) : undefined,
+        });
+        const renamed = Object.keys(patch).length > 0
+          ? await ctx.api.put<Flow>(`${root}/${copy.id}`, patch) : copy;
         return report('Сценарий скопирован.', showFlow(renamed, false));
       }
 
       if (!flowId) {
         if (!args.name) return 'Чтобы создать сценарий, нужно название.';
-        const graph = args.nodes ? build(args.nodes, args.edges ?? []) : undefined;
+        const graph = graphChanged ? build(args) : undefined;
         const created = await ctx.api.post<Flow>(
           root,
           body({
@@ -460,6 +552,9 @@ export const flowTools: Tool[] = [
             description: args.description,
             scope: args.scope,
             graph,
+            template: args.template,
+            provider_id: args.provider_id,
+            knowledge_base_id: args.knowledge_base_id,
           }),
         );
         return report(
@@ -471,7 +566,7 @@ export const flowTools: Tool[] = [
       }
 
       const current = await ctx.api.get<Flow>(`${root}/${flowId}`);
-      const graph = args.nodes ? build(args.nodes, args.edges ?? [], current.graph) : undefined;
+      const graph = graphChanged ? build(args, current.graph) : undefined;
       const payload = body({
         name: args.name,
         description: args.description,
@@ -602,7 +697,8 @@ export const flowTools: Tool[] = [
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
       const result = await ctx.api.post<{
         matched: boolean;
-        steps: { node_id: string; kind: string; title: string; output: string | null }[];
+        steps: { node_id: string; kind: string; title: string; output: string | null;
+          detail: Record<string, unknown> }[];
         messages: string[];
         variables: Record<string, unknown>;
         error: string | null;
@@ -624,6 +720,7 @@ export const flowTools: Tool[] = [
           вид: step.kind,
           подпись: step.title,
           результат: step.output,
+          подробности: step.detail,
         })),
         бот_ответил_бы: result.messages,
         переменные: result.variables,

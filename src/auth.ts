@@ -4,8 +4,8 @@
  * Токен выпускается в панели: аккаунт → Интеграции → «Выпустить токен».
  * Он не истекает сам по себе и не требует обновления, поэтому здесь нет
  * ни ротации, ни гонки между двумя сессиями Claude Code за общий файл —
- * всё это ушло вместе с входом по паролю. Пароль сервер теперь не видит
- * вовсе и хранить его негде.
+ * всё это ушло вместе с входом по паролю. Для входа хранится только токен;
+ * явная смена пароля — отдельная операция аккаунта без сохранения паролей.
  *
  * Прав токен не добавляет: он опознаёт того же пользователя, и панель
  * применяет к запросам ровно его роли. Отзывают токен там же, где
@@ -38,12 +38,11 @@ export interface Identity {
 export const TOKEN_PREFIX = 'opb_';
 
 const LOGIN_HINT =
-  'Вызовите инструмент operbots_login — откроется окно для адреса панели и токена. ' +
+  'Вызовите operbots_login для инструкции подключения или с локальным token_file. ' +
   'Токен выпускается в панели: аккаунт → Интеграции. ' +
   'Либо выполните в терминале operbots-mcp login, либо задайте OPERBOTS_URL и OPERBOTS_TOKEN.';
 
 export class AuthManager {
-  private identity: Identity | null = null;
   private profile: StoredProfile | null = null;
   private loaded = false;
 
@@ -75,10 +74,10 @@ export class AuthManager {
 
   /** Токен доступа: из окружения или из сохранённого профиля. */
   async token(): Promise<string> {
-    if (this.config.token) return this.config.token;
+    if (this.config.token) return validateToken(this.config.token);
 
     const profile = await this.storedProfile();
-    if (profile?.token) return profile.token;
+    if (profile?.token) return validateToken(profile.token);
 
     // Файл от прежних выпусков хранил токен обновления сессии. Его
     // больше не принимают, и молчать об этом нельзя: человек увидел бы
@@ -101,11 +100,9 @@ export class AuthManager {
 
   // ── Кто вошёл ──────────────────────────────────────────────
 
-  /** Владелец токена. Ответ запоминается на время работы процесса. */
+  /** Владелец токена: перечитываем, чтобы видеть правки профиля и отзыв доступа. */
   async whoami(): Promise<Identity> {
-    if (this.identity) return this.identity;
-    this.identity = await this.fetchIdentity(await this.baseUrl(), await this.token());
-    return this.identity;
+    return this.fetchIdentity(await this.baseUrl(), await this.token());
   }
 
   private async fetchIdentity(base: string, token: string): Promise<Identity> {
@@ -126,14 +123,7 @@ export class AuthManager {
    * нечем.
    */
   async signIn(base: string, token: string): Promise<Identity> {
-    const value = token.trim();
-    if (!value) throw new AuthRequiredError('Токен пустой.');
-    if (!value.startsWith(TOKEN_PREFIX)) {
-      throw new AuthRequiredError(
-        `Это не похоже на токен панели — он начинается с «${TOKEN_PREFIX}». ` +
-          'Выпустите токен в панели: аккаунт → Интеграции.',
-      );
-    }
+    const value = validateToken(token);
 
     const user = await this.fetchIdentity(base, value);
 
@@ -149,14 +139,30 @@ export class AuthManager {
 
     this.profile = await loadProfile(this.config.credentialsPath, base);
     this.loaded = true;
-    this.identity = user;
+    // Явный вход выбирает подключение на время этого процесса, включая
+    // сервер, который изначально получил адрес и токен из окружения.
+    this.config.baseUrl = base;
+    this.config.token = null;
     return user;
   }
 
   /** Забывает доступ на этой машине. Сам токен остаётся действующим. */
   forget(): void {
-    this.identity = null;
     this.profile = null;
     this.loaded = false;
   }
+}
+
+/** Не даём ошибке заголовка HTTP раскрыть неправильно вставленный токен. */
+function validateToken(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new AuthRequiredError('Токен пустой.');
+  if (!/^opb_[A-Za-z0-9_-]+$/.test(value)) {
+    throw new AuthRequiredError(
+      `Это не похоже на токен панели — он начинается с «${TOKEN_PREFIX}» ` +
+        'и содержит только латинские буквы, цифры, дефис и подчёркивание. ' +
+        'Выпустите токен в панели: аккаунт → Интеграции.',
+    );
+  }
+  return value;
 }

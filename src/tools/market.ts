@@ -14,7 +14,7 @@
 import { z } from 'zod';
 
 import type { Page } from '../api.js';
-import type { Context } from '../context.js';
+import { pickByName, type Context } from '../context.js';
 import {
   BOT_PLATFORMS,
   FLOW_SCOPES,
@@ -109,6 +109,8 @@ function showBrief(item: ItemBrief) {
     раздел: item.category,
     для: item.scope === 'community' ? 'сообществ' : 'диалогов',
     от_кого: whose(item),
+    дело_источника: item.origin_case_id,
+    показывать_дело: item.show_origin,
     версия: item.version,
     платформы: item.facts.platforms,
     узлов: item.facts.nodes,
@@ -119,14 +121,12 @@ function showBrief(item: ItemBrief) {
     нужно: needsNote(item.facts),
     установок: item.installs_count,
     лайков: item.likes_count,
-    мой_лайк: item.liked || undefined,
-    стоит_в_этом_деле: item.installed.map(
-      (place) =>
-        `бот «${place.bot_name}», сценарий ${place.flow_id}` +
-        (place.version !== null && place.version < item.version
-          ? ` (версия ${place.version}, доступна ${item.version})`
-          : ''),
-    ),
+    мой_лайк: item.liked,
+    стоит_в_этом_деле: item.installed.map((place) => ({
+      бот: place.bot_name, идентификатор_бота: place.bot_id, сценарий: place.flow_id,
+      версия: place.version,
+      доступна_новая_версия: place.version !== null && place.version < item.version ? item.version : undefined,
+    })),
     опубликована: item.published_at,
     обновлена: item.updated_at,
   };
@@ -143,32 +143,18 @@ export async function findItem(ctx: Context, hint: string, caseId?: string): Pro
   const wanted = hint.trim();
   const query = caseId ? { case_id: caseId } : undefined;
   if (UUID.test(wanted)) return ctx.api.get<Item>(`/market/items/${wanted}`, query);
+  if (!wanted) throw new ApiError(400, 'item_required', 'Укажите публикацию: название, короткое имя или идентификатор.');
 
-  const needle = wanted.toLowerCase();
-  const page = await ctx.api.get<Page<ItemBrief>>('/market/items', {
-    query: wanted,
-    limit: 50,
-  });
-  const exact = page.items.filter((item) => item.slug.toLowerCase() === needle);
-  const byTitle = page.items.filter((item) => item.title.trim().toLowerCase() === needle);
-  const narrowed = exact.length > 0 ? exact : byTitle.length > 0 ? byTitle : page.items;
-
-  if (narrowed.length === 1 && narrowed[0]) {
-    return ctx.api.get<Item>(`/market/items/${narrowed[0].id}`, query);
+  // ponytail: читаем каталог по страницам; отдельный API по slug при большом маркете.
+  const items: ItemBrief[] = [];
+  for (;;) {
+    const page = await ctx.api.get<Page<ItemBrief>>('/market/items', { limit: 100, offset: items.length });
+    items.push(...page.items);
+    if (items.length >= page.total || page.items.length === 0) break;
   }
-  if (narrowed.length === 0) {
-    throw new ApiError(404, 'market_item_not_found', `Публикации «${hint}» в маркете нет.`);
-  }
-  throw new ApiError(
-    409,
-    'market_item_ambiguous',
-    `Под «${hint}» подходит несколько публикаций: ` +
-      narrowed
-        .slice(0, 8)
-        .map((item) => `«${item.title}» (${item.slug}, ${whose(item)})`)
-        .join('; ') +
-      '. Уточните короткое имя или идентификатор.',
-  );
+  const match = items.find((item) => item.slug.toLowerCase() === wanted.toLowerCase())
+    ?? pickByName(items.map((item) => ({ ...item, name: item.title })), wanted);
+  return ctx.api.get<Item>(`/market/items/${match.id}`, query);
 }
 
 export const marketTools: Tool[] = [
@@ -201,6 +187,7 @@ export const marketTools: Tool[] = [
         .boolean()
         .optional()
         .describe('Только публикации этого дела — то, что выложили сами.'),
+      origin_case_id: z.string().uuid().optional().describe('Идентификатор дела-источника: только его публичные публикации.'),
       needs_ai: z.boolean().optional().describe('Есть ли в сценарии узлы с ИИ.'),
       needs_knowledge: z.boolean().optional().describe('Нужна ли сценарию база знаний.'),
       sort: z
@@ -218,6 +205,9 @@ export const marketTools: Tool[] = [
         if (args.case || args.mine) throw error;
         return null;
       });
+      if (args.mine && args.origin_case_id && args.origin_case_id !== found?.id) {
+        throw new ApiError(400, 'origin_conflict', 'mine=true и origin_case_id указывают разные дела.');
+      }
       const page = await ctx.api.get<Page<ItemBrief>>('/market/items', {
         query: args.query,
         category: args.category,
@@ -226,7 +216,7 @@ export const marketTools: Tool[] = [
         source: args.source,
         needs_ai: args.needs_ai,
         needs_knowledge: args.needs_knowledge,
-        origin_case_id: args.mine ? found?.id : undefined,
+        origin_case_id: args.origin_case_id ?? (args.mine ? found?.id : undefined),
         case_id: found?.id,
         sort: args.sort,
         limit: args.limit,
@@ -235,21 +225,7 @@ export const marketTools: Tool[] = [
 
       return report(
         `Публикаций в маркете: ${page.total}. ${pageFooter(page)}`,
-        page.items.map((item) => ({
-          публикация: item.title,
-          короткое_имя: item.slug,
-          кратко: item.summary,
-          раздел: item.category,
-          для: item.scope === 'community' ? 'сообществ' : 'диалогов',
-          от_кого: whose(item),
-          версия: item.version,
-          платформы: item.facts.platforms,
-          узлов: item.facts.nodes,
-          нужно: needsNote(item.facts),
-          установок: item.installs_count,
-          лайков: item.likes_count,
-          стоит_в_этом_деле: item.installed.map((place) => `бот «${place.bot_name}»`),
-        })),
+        page.items.map(showBrief),
       );
     },
   }),
@@ -271,6 +247,7 @@ export const marketTools: Tool[] = [
       const item = await findItem(ctx, args.item, found?.id);
       return report(`Публикация «${item.title}»`, {
         ...showBrief(item),
+        сценарий_источника: item.origin_flow_id,
         описание: item.description,
         виды_узлов: item.facts.kinds,
         версии: item.versions.map((version) => ({

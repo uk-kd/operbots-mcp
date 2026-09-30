@@ -92,6 +92,7 @@ export const caseTools: Tool[] = [
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
+      const card = await ctx.api.get<Record<string, unknown>>(`/cases/${found.id}`);
       const overview = await optional(
         ctx.api.get<Overview>(`/cases/${found.id}/overview`, { days: args.days ?? 7 }),
       );
@@ -121,6 +122,7 @@ export const caseTools: Tool[] = [
             };
 
       return report(`${found.emoji} ${found.name}`, {
+        ...card,
         идентификатор: found.id,
         короткое_имя: found.slug,
         роль: found.is_owner ? 'владелец' : (found.role_name ?? 'без роли'),
@@ -145,7 +147,8 @@ export const caseTools: Tool[] = [
         .optional()
         .describe('Какое дело менять. Не указывайте, чтобы создать новое.'),
       name: z.string().min(2).max(120).optional().describe('Название дела.'),
-      description: z.string().max(2000).optional().describe('Описание.'),
+      description: z.string().max(2000).nullable().optional().describe('Описание; null — очистить.'),
+      settings: z.record(z.string(), z.unknown()).optional().describe('Настройки дела: карта целиком.'),
       emoji: z.string().max(16).optional().describe('Знак дела, например 🛍. По умолчанию ◆.'),
       accent: z
         .string()
@@ -164,13 +167,16 @@ export const caseTools: Tool[] = [
         emoji: args.emoji,
         accent: args.accent,
         is_archived: args.archived,
+        settings: args.settings,
       });
 
       if (!args.case) {
         if (!args.name) return 'Чтобы создать дело, нужно название.';
         // Архив задаётся только правкой: при создании панель такого поля не ждёт.
-        const { is_archived: _, ...fresh } = payload;
+        const { is_archived, settings, ...fresh } = payload;
         const created = await ctx.api.post<Record<string, unknown>>('/cases', fresh);
+        const followup = body({ is_archived, settings });
+        if (Object.keys(followup).length) await ctx.api.patch(`/cases/${created.id as string}`, followup);
         ctx.forgetCases();
         return report('Дело создано.', {
           дело: `${created.emoji as string} ${created.name as string}`,
@@ -231,25 +237,28 @@ export const caseTools: Tool[] = [
     input: {
       case: caseField,
       action: z
-        .string()
+        .union([z.string(), z.array(z.string())])
         .optional()
         .describe(
           'Вид события, например flow.update, bot.delete, role.update. Без него — все виды.',
         ),
+      actor_id: z.uuid().optional().describe('Автор из audit_filters.'),
       limit: limitField(200, 50),
       offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
-      const page = await ctx.api.get<Page<AuditEvent>>(`/cases/${found.id}/audit`, {
+      const page = await ctx.api.get<Page<AuditEvent>>(`/cases/${found.id}/audit`, body({
         limit: args.limit,
         offset: args.offset,
         action: args.action,
-      });
+        actor_id: args.actor_id,
+      }));
 
       return report(
         `Журнал дела «${found.name}» — ${pageFooter(page)}`,
         page.items.map((item) => ({
+          ...item,
           когда: item.created_at,
           что: item.summary,
           вид: item.action,
@@ -258,6 +267,15 @@ export const caseTools: Tool[] = [
           адрес: item.ip_address ?? undefined,
         })),
       );
+    },
+  }),
+
+  tool({
+    name: 'audit_filters', title: 'Отбор журнала действий', kind: 'read',
+    description: 'Доступные виды событий и авторы с числом записей, включая ушедших участников.',
+    input: { case: caseField }, async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report('Отбор журнала.', await ctx.api.get(`/cases/${found.id}/audit/filters`));
     },
   }),
 

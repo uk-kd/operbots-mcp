@@ -7,12 +7,13 @@
  * человека в терминале.
  */
 
-import { VERSION } from './config.js';
+import { VERSION, loadConfig } from './config.js';
 import { describeError } from './errors.js';
 import { help, login, logout, setup, status, tools } from './cli.js';
 import { serve } from './server.js';
 
 async function main(): Promise<number> {
+  if (loadConfig().insecureTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   const [command, ...rest] = process.argv.slice(2);
 
   switch (command) {

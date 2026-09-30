@@ -9,11 +9,11 @@
 
 import { z } from 'zod';
 
-import type { Context } from '../context.js';
+import { pickByName, type Context } from '../context.js';
 import type { Page } from '../api.js';
 import { DIALOG_KINDS, DIALOG_MODES } from '../enums.js';
 import { ApiError } from '../errors.js';
-import { pageFooter, report } from '../format.js';
+import { pageFooter, raw, report } from '../format.js';
 import { findMember } from './people.js';
 import { caseField, botField, body, limitField, optional, tool, type Tool } from './kit.js';
 
@@ -27,6 +27,11 @@ interface Dialog {
   member_status: string | null;
   /** Сценарий, назначенный этому сообществу поверх базового у бота. */
   flow_id: string | null;
+  assigned_operator_id: string | null;
+  external_user_id: number | null;
+  language_code: string | null;
+  ai_memory: Record<string, unknown>;
+  created_at: string;
   username: string | null;
   contact_name: string;
   mode: string;
@@ -63,11 +68,13 @@ interface Message {
 
 interface Journey {
   flow_name: string;
-  stage: { node_id: string; title: string; kind: string } | null;
+  flow_id: string | null;
+  nodes_total: number;
+  stage: { node_id: string; title: string; kind: string; at?: string | null } | null;
   awaiting: string | null;
   /** Куда разговор пойдёт, если ответить прямо сейчас. */
-  next_steps: { node_id: string; title: string; kind: string }[];
-  trail: { node_id: string; title: string; kind: string }[];
+  next_steps: { node_id: string; title: string; kind: string; at?: string | null }[];
+  trail: { node_id: string; title: string; kind: string; at?: string | null }[];
   scheduled: {
     id: string;
     node_id: string;
@@ -96,6 +103,7 @@ interface Reply {
   id: string;
   title: string;
   text: string;
+  parse_mode: string;
   uses: number;
   last_used_at: string | null;
   author: { display_name: string } | null;
@@ -110,7 +118,7 @@ interface Broadcast {
   text: string;
   parse_mode: string;
   buttons: { text: string; url: string }[][];
-  attachment: { kind: string; file_name: string; file_size: number } | null;
+  attachment: { kind: string; file_name: string; file_size: number; file_id?: string | null } | null;
   /** Условия отбора получателей — снимком, каким их сохранили. */
   audience: Record<string, unknown>;
   /** Те же условия словами: «метки: клиент, кроме: отписался». */
@@ -139,8 +147,12 @@ interface BroadcastPreview {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHAT_ID = /^-?\d+$/;
 
-/** Сколько диалогов перебрать в поисках номера чата, прежде чем сдаться. */
+// ponytail: scan at most 1000 dialogs; add backend chat_id filtering if larger cases need numeric lookup.
 const CHAT_SCAN = 1000;
+const dialogField = z.string().trim().min(1)
+  .describe('Диалог: имя, @username, номер чата или идентификатор.');
+const parseMode = z.enum(['', 'HTML']).optional()
+  .describe('Разметка: HTML или пустая строка для обычного текста.');
 
 /**
  * Диалог по номеру чата.
@@ -152,26 +164,37 @@ const CHAT_SCAN = 1000;
  */
 async function findByChatId(ctx: Context, caseId: string, chatId: string): Promise<Dialog | null> {
   const step = 200;
+  const hits: Dialog[] = [];
   for (let offset = 0; offset < CHAT_SCAN; offset += step) {
     const page = await ctx.api.get<Page<Dialog>>(`/cases/${caseId}/dialogs`, {
       limit: step,
       offset,
     });
-    const hit = page.items.find((item) => String(item.chat_id) === chatId);
-    if (hit) return hit;
+    if (page.total > CHAT_SCAN) {
+      throw new ApiError(400, 'dialog_id_required',
+        `В деле больше ${CHAT_SCAN} диалогов. Укажите идентификатор UUID из dialogs_list.`);
+    }
+    hits.push(...page.items.filter((item) => String(item.chat_id) === chatId));
+    if (hits.length > 1) {
+      throw new ApiError(400, 'ambiguous',
+        `Номер чата ${chatId} принадлежит нескольким диалогам: ` +
+        hits.map(item => `${item.bot_name}: ${item.id}`).join(', ') + '. Укажите идентификатор UUID.');
+    }
     if (page.items.length === 0 || offset + page.items.length >= page.total) break;
   }
-  return null;
+  return hits[0] ?? null;
 }
 
 /** Ищет диалог по идентификатору, номеру чата, имени собеседника или @username. */
 async function findDialog(ctx: Context, caseId: string, hint: string): Promise<Dialog> {
   const wanted = hint.trim();
+  if (!wanted) throw new ApiError(400, 'dialog_required', 'Укажите диалог или идентификатор UUID.');
   if (UUID.test(wanted)) return ctx.api.get<Dialog>(`/cases/${caseId}/dialogs/${wanted}`);
 
   if (CHAT_ID.test(wanted)) {
     const byChat = await findByChatId(ctx, caseId, wanted);
     if (byChat) return byChat;
+    throw new ApiError(404, 'dialog_not_found', `Диалога с номером чата ${wanted} не нашлось.`);
   }
 
   const needle = wanted.replace(/^@/, '').toLowerCase();
@@ -189,6 +212,10 @@ async function findDialog(ctx: Context, caseId: string, hint: string): Promise<D
   });
 
   const candidates = page.items;
+  if (candidates.length < page.total) {
+    throw new ApiError(400, 'dialog_id_required',
+      'Совпадений больше одной страницы. Уточните имя или укажите идентификатор UUID из dialogs_list.');
+  }
   const byHandle = candidates.filter((item) => item.username?.toLowerCase() === needle);
   const byName = candidates.filter((item) => {
     const name = item.contact_name.trim().toLowerCase();
@@ -256,6 +283,7 @@ const showDialog = (dialog: Dialog) => ({
   бот_в_чате: dialog.member_status ?? undefined,
   свой_сценарий: dialog.flow_id ?? undefined,
   режим: dialog.mode === 'operator' ? `ведёт оператор ${dialog.operator?.display_name ?? ''}` : 'по сценарию',
+  назначенный_оператор: dialog.assigned_operator_id,
   ии_отвечает: dialog.is_ai_enabled,
   заблокирован: dialog.is_blocked || undefined,
   закреплён: dialog.is_pinned || undefined,
@@ -270,29 +298,34 @@ const showDialog = (dialog: Dialog) => ({
 
 /** Ищет заготовку по идентификатору, названию или началу текста. */
 async function findReply(ctx: Context, caseId: string, hint: string): Promise<Reply> {
+  const wanted = hint.trim();
+  if (!wanted) throw new ApiError(400, 'reply_required', 'Укажите название или идентификатор заготовки.');
   const list = await ctx.api.get<Reply[]>(`/cases/${caseId}/replies`);
-  const needle = hint.trim().toLowerCase();
-
-  const match =
-    list.find((item) => item.id === hint) ??
-    list.find((item) => item.title.toLowerCase() === needle) ??
-    list.find((item) => item.title.toLowerCase().includes(needle)) ??
-    list.find((item) => item.text.toLowerCase().startsWith(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'reply_not_found',
-      `Заготовки «${hint}» в деле нет. Есть: ${list.map((item) => item.title).join('; ') || 'ни одной'}`,
-    );
+  if (UUID.test(wanted)) {
+    const match = list.find(item => item.id === wanted);
+    if (match) return match;
+  } else {
+    const needle = wanted.toLowerCase();
+    if (list.some(item => item.title.toLowerCase().includes(needle))) {
+      return pickByName(list.map(item => ({ ...item, name: item.title })), wanted);
+    }
+    const matches = list.filter(item => item.text.toLowerCase().startsWith(needle));
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) {
+      throw new ApiError(400, 'ambiguous',
+        `Под «${wanted}» подходит несколько заготовок: ` +
+        matches.map(item => `${item.title}: ${item.id}`).join(', ') + '. Укажите идентификатор.');
+    }
   }
-  return match;
+  throw new ApiError(404, 'reply_not_found',
+    `Заготовки «${hint}» в деле нет. Есть: ${list.map(item => item.title).join('; ') || 'ни одной'}`);
 }
 
 const showReply = (reply: Reply) => ({
   заготовка: reply.title,
   идентификатор: reply.id,
   текст: reply.text,
+  разметка: reply.parse_mode,
   вставляли_раз: reply.uses || undefined,
   последний_раз: reply.last_used_at,
   автор: reply.author?.display_name,
@@ -308,9 +341,15 @@ const showReply = (reply: Reply) => ({
  */
 async function findBroadcast(ctx: Context, caseId: string, hint: string): Promise<Broadcast> {
   const wanted = hint.trim();
+  if (!wanted) throw new ApiError(400, 'broadcast_required', 'Укажите название или идентификатор рассылки.');
   if (UUID.test(wanted)) return ctx.api.get<Broadcast>(`/cases/${caseId}/broadcasts/${wanted}`);
 
   const page = await ctx.api.get<Page<Broadcast>>(`/cases/${caseId}/broadcasts`, { limit: 100 });
+  // ponytail: names resolve within 100 broadcasts; use UUID or add backend exact-name filtering for larger cases.
+  if (page.total > page.items.length) {
+    throw new ApiError(400, 'broadcast_id_required',
+      'Рассылок больше одной страницы. Укажите идентификатор UUID из broadcasts_list.');
+  }
   const needle = wanted.toLowerCase();
   const exact = page.items.filter((item) => item.title.toLowerCase() === needle);
   const found =
@@ -324,12 +363,7 @@ async function findBroadcast(ctx: Context, caseId: string, hint: string): Promis
       404,
       'broadcast_not_found',
       `Рассылки «${hint}» в деле нет. Есть: ` +
-        `${page.items.map((item) => `${item.title} (${item.status})`).join('; ') || 'ни одной'}` +
-        // Дальше сотни не смотрим: обещать «такой нет», перебрав часть,
-        // нельзя — скажем, сколько именно перебрали.
-        (page.total > page.items.length
-          ? `. Искал среди ${page.items.length} последних из ${page.total} — старую ищите по идентификатору`
-          : ''),
+        `${page.items.map((item) => `${item.title} (${item.status})`).join('; ') || 'ни одной'}`,
     );
   }
 
@@ -383,11 +417,7 @@ const audienceInput = {
     .max(12)
     .optional()
     .describe('Язык собеседника, как его сообщает платформа: ru, en. Сообщает не всякая.'),
-  // Условия «пришли не раньше такого-то дня» (joined_after) здесь нет
-  // намеренно: панель его объявляет, но на любом значении отвечает
-  // внутренней ошибкой — сравнение даты с текстом не проходит в самой
-  // базе (repositories/broadcast.py, audience_filter). Вернуть, когда
-  // панель починят: поле уже описано в её схеме Audience.
+  joined_after: z.iso.date().optional().describe('Пришли не раньше этого дня: YYYY-MM-DD.'),
   skip_broadcast: z
     .string()
     .optional()
@@ -397,6 +427,46 @@ const audienceInput = {
     ),
 };
 
+const audienceSchema = z.object({
+  mode: z.enum(DIALOG_MODES).nullable().optional(),
+  tags: z.array(z.string().max(24)).max(10).optional(),
+  tag: z.string().max(24).nullable().optional(),
+  exclude_tags: z.array(z.string().max(24)).max(10).optional(),
+  assigned_to: z.string().uuid().nullable().optional(),
+  quiet_days: z.number().int().min(1).max(365).nullable().optional(),
+  language: z.string().max(12).nullable().optional(),
+  joined_after: z.iso.date().nullable().optional(),
+  skip_broadcast_id: z.string().uuid().nullable().optional(),
+}).strict().optional().describe(
+  'Условия целиком, как в broadcasts_get. audience={} явно снимает все условия; ' +
+  'не сочетайте с отдельными mode/tags/assigned_to и другими условиями.',
+);
+const buttonRows = z.array(z.array(z.object({
+  text: z.string().min(1).max(64),
+  url: z.string().max(512).regex(/^(https?:\/\/|tg:\/\/|mailto:)\S+$/i),
+}).strict()).max(3)).max(6).optional()
+  .describe('Кнопки-ссылки: не больше шести рядов по три кнопки. [] снимает все кнопки.');
+const broadcastField = z.string().trim().min(1)
+  .describe('Рассылка: название или идентификатор.');
+const broadcastConfirm = z.string().describe('Точное название рассылки — подтверждение действия.');
+
+interface BroadcastTarget {
+  id: string;
+  dialog_id: string;
+  name: string;
+  username: string | null;
+  status: string;
+  error: string | null;
+  sent_at: string | null;
+}
+
+function confirmBroadcast(item: Broadcast, name: string) {
+  if (name !== item.title) {
+    throw new ApiError(400, 'confirmation_mismatch',
+      `Подтверждение должно точно совпадать с названием «${item.title}».`);
+  }
+}
+
 interface AudienceArgs {
   mode?: string;
   tags?: string[];
@@ -404,7 +474,9 @@ interface AudienceArgs {
   assigned_to?: string;
   quiet_days?: number;
   language?: string;
+  joined_after?: string;
   skip_broadcast?: string;
+  audience?: z.infer<typeof audienceSchema>;
 }
 
 /** Переводит названия в то, что панель ждёт в поле audience. */
@@ -413,6 +485,13 @@ async function buildAudience(
   caseId: string,
   args: AudienceArgs,
 ): Promise<Record<string, unknown>> {
+  if (args.audience !== undefined) {
+    if (Object.keys(audienceInput).some(key =>
+      Object.hasOwn(args, key) && args[key as keyof AudienceArgs] !== undefined)) {
+      throw new ApiError(400, 'invalid_input', 'Передайте audience или отдельные условия отбора.');
+    }
+    return args.audience;
+  }
   const assigned = args.assigned_to ? await findMember(ctx, caseId, args.assigned_to) : null;
   const skip = args.skip_broadcast ? await findBroadcast(ctx, caseId, args.skip_broadcast) : null;
 
@@ -425,6 +504,7 @@ async function buildAudience(
     assigned_to: assigned?.user.id,
     quiet_days: args.quiet_days,
     language: args.language,
+    joined_after: args.joined_after,
     skip_broadcast_id: skip?.id,
   });
 }
@@ -435,16 +515,15 @@ const showBroadcast = (item: Broadcast) => ({
   бот: item.bot_name,
   состояние: item.status,
   кому: item.audience_text,
+  audience: raw(item.audience),
   текст: item.text,
   разметка: item.parse_mode || undefined,
-  кнопки: item.buttons?.flat().map((кнопка) => `${кнопка.text} → ${кнопка.url}`),
-  вложение: item.attachment
-    ? `${item.attachment.kind}: ${item.attachment.file_name}`
-    : undefined,
-  получателей: item.total || undefined,
-  ушло: item.sent || undefined,
-  не_дошло: item.failed || undefined,
-  пропущено: item.skipped || undefined,
+  кнопки: raw(item.buttons),
+  вложение: item.attachment,
+  получателей: item.total,
+  ушло: item.sent,
+  не_дошло: item.failed,
+  пропущено: item.skipped,
   срок: item.run_at,
   начата: item.started_at,
   закончена: item.finished_at,
@@ -477,12 +556,17 @@ export const dialogTools: Tool[] = [
         .describe('bot — ведёт сценарий; operator — перехвачен человеком.'),
       query: z.string().optional().describe('Поиск по имени, нику и последнему сообщению.'),
       only_unread: z.boolean().optional().describe('Только с непрочитанными сообщениями.'),
+      assigned_to: z.string().optional()
+        .describe('Назначены участнику: почта, имя или идентификатор из members_list.'),
+      tag: z.string().max(24).optional().describe('Одна метка для отбора диалогов.'),
       limit: limitField(200, 40),
       offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const bot = args.bot ? await ctx.resolveBot(found.id, args.bot) : null;
+      const assigned = args.assigned_to
+        ? await findMember(ctx, found.id, args.assigned_to) : null;
 
       const page = await ctx.api.get<Page<Dialog>>(`/cases/${found.id}/dialogs`, {
         bot_id: bot?.id,
@@ -490,6 +574,8 @@ export const dialogTools: Tool[] = [
         mode: args.mode,
         query: args.query,
         only_unread: args.only_unread,
+        assigned_to: assigned?.user.id,
+        tag: args.tag,
         limit: args.limit,
         offset: args.offset,
       });
@@ -526,58 +612,61 @@ export const dialogTools: Tool[] = [
       const journey = await optional(
         ctx.api.get<Journey>(`/cases/${found.id}/dialogs/${dialog.id}/journey`),
       );
-      // Сообщество глазами платформы: люди, ссылка, роль бота. Личной
-      // переписке спрашивать нечего.
-      const chat =
-        dialog.chat_type === 'private'
-          ? null
-          : await optional(ctx.api.get<ChatInfo>(`/cases/${found.id}/dialogs/${dialog.id}/chat`));
-
       return report(`Диалог с «${dialog.contact_name}»`, {
         ...showDialog(dialog),
-        о_сообществе:
-          chat === null
-            ? undefined
-            : typeof chat === 'string'
-              ? chat
-              : chat.available
-                ? {
-                    название: chat.title,
-                    описание: chat.description,
-                    ссылка: chat.link,
-                    участников: chat.members,
-                    бот_в_чате: chat.bot_status,
-                  }
-                : chat.reason,
+        человек_на_платформе: dialog.external_user_id,
+        язык: dialog.language_code,
+        создан: dialog.created_at,
+        память_ии: dialog.ai_memory,
         переменные: Object.keys(dialog.variables ?? {}).length > 0 ? dialog.variables : undefined,
         по_сценарию:
           typeof journey === 'string'
             ? journey
             : {
                 сценарий: journey.flow_name || 'у бота нет активного сценария',
+                идентификатор: journey.flow_id,
+                узлов: journey.nodes_total,
                 стоит_на: journey.stage
-                  ? `${journey.stage.title || journey.stage.node_id} (${journey.stage.kind})`
+                  ? { узел: journey.stage.node_id, подпись: journey.stage.title,
+                    вид: journey.stage.kind, время: journey.stage.at }
                   : 'нигде не ждёт',
                 ждёт_ответа_в: journey.awaiting,
                 // Что будет дальше, важнее пройденного: по нему решают,
                 // вмешиваться или дать боту доработать.
                 дальше_по_сценарию:
                   journey.next_steps?.length > 0
-                    ? journey.next_steps.map(
-                        (step) => `${step.title || step.node_id} (${step.kind})`,
-                      )
+                    ? journey.next_steps.map(step => ({
+                        узел: step.node_id, подпись: step.title, вид: step.kind, время: step.at,
+                      }))
                     : undefined,
-                пройдено: journey.trail.map(
-                  (step) => `${step.title || step.node_id} (${step.kind})`,
-                ),
-                запланировано: journey.scheduled.map(
-                  (step) =>
-                    `${step.title || step.node_id} — через ${Math.max(0, Math.round(step.seconds_left / 60))} мин ` +
-                    `(${step.run_at})` +
-                    (step.cancel_on_reply ? ', отменится при ответе' : ''),
-                ),
+                пройдено: journey.trail.map(step => ({
+                  узел: step.node_id, подпись: step.title, вид: step.kind, время: step.at,
+                })),
+                запланировано: journey.scheduled.map(step => ({
+                  идентификатор: step.id, узел: step.node_id, подпись: step.title,
+                  срок: step.run_at, секунд_осталось: step.seconds_left,
+                  отменится_при_ответе: step.cancel_on_reply,
+                })),
+                переменные: journey.variables,
               },
       });
+    },
+  }),
+
+  tool({
+    name: 'dialogs_chat_info',
+    title: 'Сверить сведения о сообществе',
+    kind: 'write',
+    description:
+      'Спрашивает платформу о группе или канале: участники, ссылка и положение бота. ' +
+      'Панель при этом обновляет название, положение бота и признак блокировки диалога. ' +
+      'Для чтения сохранённых данных используйте dialogs_get.',
+    input: { case: caseField, dialog: dialogField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const info = await ctx.api.get<ChatInfo>(`/cases/${found.id}/dialogs/${dialog.id}/chat`);
+      return report(`Сообщество «${dialog.contact_name}»`, info);
     },
   }),
 
@@ -587,25 +676,32 @@ export const dialogTools: Tool[] = [
     kind: 'read',
     description:
       'Сообщения диалога от старых к новым. По умолчанию ничего не помечает прочитанным — ' +
-      'счётчики в панели остаются как были. Чтобы уйти вглубь истории, передайте before ' +
-      'со временем самого раннего сообщения из предыдущего ответа.',
+      'счётчики в панели остаются как были. За ранними сообщениями передайте before и ' +
+      'before_id самого раннего сообщения: время бывает одинаковым у нескольких сообщений. ' +
+      'Пометить прочитанным — отдельный write-инструмент dialogs_mark_read.',
     input: {
       case: caseField,
       dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
       limit: limitField(300, 80),
-      before: z.string().optional().describe('Показать сообщения раньше этого момента (ISO 8601).'),
+      before: z.iso.datetime({ offset: true, local: true }).optional()
+        .describe('Показать сообщения раньше этого момента (ISO 8601).'),
+      before_id: z.string().uuid().optional()
+        .describe('ID самого раннего сообщения вместе с before: порядок при одинаковом времени.'),
       mark_read: z
-        .boolean()
+        .literal(false)
         .optional()
-        .describe('Пометить входящие прочитанными и обнулить счётчик. По умолчанию нет.'),
+        .describe('Только false. Изменяет счётчик отдельный dialogs_mark_read.'),
     },
     async run(args, ctx) {
+      if (args.mark_read) {
+        throw new ApiError(400, 'read_only_operation', 'Используйте dialogs_mark_read.');
+      }
       const found = await ctx.resolveCase(args.case);
       const dialog = await findDialog(ctx, found.id, args.dialog);
 
       const messages = await ctx.api.get<Message[]>(
         `/cases/${found.id}/dialogs/${dialog.id}/messages`,
-        { limit: args.limit, before: args.before, mark_read: args.mark_read ?? false },
+        { limit: args.limit, before: args.before, before_id: args.before_id, mark_read: false },
       );
 
       const who = (message: Message) => {
@@ -644,13 +740,32 @@ export const dialogTools: Tool[] = [
       const earliest = messages[0]?.created_at;
       const tail =
         messages.length === (args.limit ?? 80) && earliest
-          ? `\n\nЕсть более ранние сообщения. Продолжить: before=${earliest}`
+          ? `\n\nЗа более ранними: before=${earliest} before_id=${messages[0]?.id}`
           : '';
 
       return (
         `Диалог с «${dialog.contact_name}» (бот ${dialog.bot_name}), сообщений показано ${messages.length} ` +
         `из ${dialog.message_count}\n\n${lines.join('\n') || 'переписка пуста'}${tail}`
       );
+    },
+  }),
+
+  tool({
+    name: 'dialogs_mark_read',
+    title: 'Пометить диалог прочитанным',
+    kind: 'write',
+    description: 'Обнуляет счётчик непрочитанного. Требует chat.reply; историю читает dialogs_history.',
+    input: { case: caseField, dialog: dialogField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      if (!found.permissions.includes('chat.reply')) {
+        throw new ApiError(403, 'forbidden', 'Чтобы пометить прочитанным, нужно chat.reply.',
+          { required: ['chat.reply'] });
+      }
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      await ctx.api.get<Message[]>(`/cases/${found.id}/dialogs/${dialog.id}/messages`,
+        { limit: 1, mark_read: true });
+      return `Диалог с «${dialog.contact_name}» помечен прочитанным.`;
     },
   }),
 
@@ -702,6 +817,9 @@ export const dialogTools: Tool[] = [
             'подписи. Точные числа — operbots_catalog what=platforms; сверх своего предела ' +
             'панель откажет с указанием платформы.',
         ),
+      parse_mode: parseMode,
+      buttons: z.array(z.array(z.record(z.string(), z.string()))).nullable().optional()
+        .describe('Кнопки сообщения: ряды объектов с text, url или callback_data.'),
       reply: z
         .string()
         .optional()
@@ -715,6 +833,8 @@ export const dialogTools: Tool[] = [
         .describe('Перевести диалог в ручной режим. По умолчанию да.'),
       reply_to: z
         .string()
+        .uuid()
+        .nullable()
         .optional()
         .describe(
           'Ответить цитатой: id сообщения из dialogs_history. Служебные записи и уже ' +
@@ -733,7 +853,8 @@ export const dialogTools: Tool[] = [
       const dialog = await findDialog(ctx, found.id, args.dialog);
       const message = await ctx.api.post<Message>(
         `/cases/${found.id}/dialogs/${dialog.id}/messages`,
-        body({ text, take_over: args.take_over, reply_to: args.reply_to }),
+        body({ text, parse_mode: args.parse_mode ?? template?.parse_mode ?? '',
+          buttons: args.buttons, take_over: args.take_over, reply_to: args.reply_to }),
       );
 
       if (message.error) {
@@ -758,6 +879,54 @@ export const dialogTools: Tool[] = [
   }),
 
   tool({
+    name: 'dialogs_reply_file',
+    title: 'Отправить файл собеседнику',
+    kind: 'write',
+    description: 'Отправляет локальный файл от имени бота, до 20 МиБ. Ошибка доставки видна в ответе.',
+    input: {
+      case: caseField, dialog: dialogField,
+      file_path: z.string().min(1).describe('Путь к локальному файлу.'),
+      content_type: z.string().min(1).optional().describe('MIME, например image/png для фото.'),
+      caption: z.string().max(4096).optional().describe('Подпись к вложению.'),
+      parse_mode: parseMode,
+      take_over: z.boolean().optional().describe('Перехватить диалог. По умолчанию да.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const sent = await ctx.api.upload<Message>(
+        `/cases/${found.id}/dialogs/${dialog.id}/messages/file`, args.file_path,
+        { caption: args.caption ?? '', parse_mode: args.parse_mode ?? '',
+          take_over: args.take_over ?? true }, args.content_type,
+      );
+      return report(sent.error ? 'Файл сохранён, но платформа отказала в доставке.' : 'Файл отправлен.',
+        { сообщение: sent.id, текст: sent.text, ошибка_доставки: sent.error });
+    },
+  }),
+
+  tool({
+    name: 'dialogs_download_attachment',
+    title: 'Скачать вложение сообщения',
+    kind: 'read',
+    description: 'Сохраняет вложение локально. destination должен быть новым файлом.',
+    input: {
+      case: caseField, dialog: dialogField,
+      message: z.string().uuid().describe('ID сообщения из dialogs_history.'),
+      index: z.number().int().min(0).optional().describe('Номер вложения, с нуля.'),
+      destination: z.string().min(1).describe('Путь нового файла; существующий не перезаписывается.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const saved = await ctx.api.download(
+        `/cases/${found.id}/dialogs/${dialog.id}/messages/${args.message}/file`,
+        args.destination, { index: args.index ?? 0 },
+      );
+      return report('Вложение сохранено.', saved);
+    },
+  }),
+
+  tool({
     name: 'dialogs_edit_message',
     title: 'Изменить отправленное сообщение',
     kind: 'write',
@@ -770,15 +939,16 @@ export const dialogTools: Tool[] = [
     input: {
       case: caseField,
       dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
-      message: z.string().describe('id сообщения из dialogs_history.'),
+      message: z.string().trim().uuid().describe('id сообщения из dialogs_history.'),
       text: z.string().min(1).max(4096).describe('Новый текст целиком.'),
+      parse_mode: parseMode,
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const dialog = await findDialog(ctx, found.id, args.dialog);
       const message = await ctx.api.patch<Message>(
         `/cases/${found.id}/dialogs/${dialog.id}/messages/${args.message.trim()}`,
-        { text: args.text },
+        body({ text: args.text, parse_mode: args.parse_mode }),
       );
       return `Сообщение изменено у «${dialog.contact_name}». Теперь: ${message.text ?? ''}`;
     },
@@ -795,7 +965,7 @@ export const dialogTools: Tool[] = [
     input: {
       case: caseField,
       dialog: z.string().describe('Диалог: имя собеседника, @username, номер чата или идентификатор.'),
-      message: z.string().describe('id сообщения из dialogs_history.'),
+      message: z.string().trim().uuid().describe('id сообщения из dialogs_history.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -830,6 +1000,8 @@ export const dialogTools: Tool[] = [
       ai_enabled: z.boolean().optional().describe('Отвечает ли ИИ в этом диалоге.'),
       pinned: z.boolean().optional().describe('Закрепить наверху списка.'),
       tags: z.array(z.string()).optional().describe('Метки. Заменяют прежние целиком.'),
+      assigned_operator_id: z.string().uuid().nullable().optional()
+        .describe('ID пользователя-оператора из members_list; null снимает назначение.'),
       flow: z
         .string()
         .optional()
@@ -851,17 +1023,14 @@ export const dialogTools: Tool[] = [
           const flows = await ctx.api.get<{ id: string; name: string; scope: string }[]>(
             `/cases/${found.id}/bots/${dialog.bot_id}/flows`,
           );
-          const needle = args.flow.trim().toLowerCase();
-          const chosen = flows.find(
-            (item) => item.id === args.flow || item.name.toLowerCase() === needle,
-          );
-          if (!chosen) {
-            return `У бота «${dialog.bot_name}» нет сценария «${args.flow}». Есть: ${flows
-              .filter((item) => item.scope === 'community')
-              .map((item) => item.name)
-              .join(', ')}`;
+          const wanted = args.flow.trim();
+          if (UUID.test(wanted)) {
+            const chosen = flows.find(item => item.id === wanted);
+            if (!chosen) throw new ApiError(404, 'flow_not_found', `У бота нет сценария ${wanted}.`);
+            flowId = chosen.id;
+          } else {
+            flowId = pickByName(flows.filter(item => item.scope === 'community'), wanted).id;
           }
-          flowId = chosen.id;
         }
       }
 
@@ -871,6 +1040,7 @@ export const dialogTools: Tool[] = [
         is_pinned: args.pinned,
         tags: args.tags,
         flow_id: flowId,
+        assigned_operator_id: args.assigned_operator_id,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 
@@ -973,7 +1143,7 @@ export const dialogTools: Tool[] = [
     description: 'Снимает запланированное действие: бот не отправит то, что собирался.',
     input: {
       case: caseField,
-      task_id: z.string().describe('Идентификатор действия из tasks_list.'),
+      task_id: z.string().uuid().describe('Идентификатор действия из tasks_list.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -981,6 +1151,51 @@ export const dialogTools: Tool[] = [
         `/cases/${found.id}/tasks/${args.task_id}`,
       );
       return result.message ?? (result.ok ? 'Действие отменено.' : 'Действие не найдено.');
+    },
+  }),
+
+  tool({
+    name: 'dialogs_release',
+    title: 'Вернуть диалог сценарию',
+    kind: 'write',
+    description: 'Снимает оператора и возвращает ведение диалога сценарию.',
+    input: { case: caseField, dialog: dialogField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const saved = await ctx.api.post<Dialog>(`/cases/${found.id}/dialogs/${dialog.id}/release`);
+      return report('Диалог возвращён сценарию.', showDialog(saved));
+    },
+  }),
+
+  tool({
+    name: 'dialogs_forget_memory',
+    title: 'Очистить память ИИ о диалоге',
+    kind: 'write',
+    description: 'Удаляет сводку ИИ. Переписка остаётся; следующая сводка соберётся по ней заново.',
+    input: { case: caseField, dialog: dialogField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      await ctx.api.post<Dialog>(`/cases/${found.id}/dialogs/${dialog.id}/forget-memory`);
+      return `Память ИИ о диалоге с «${dialog.contact_name}» очищена.`;
+    },
+  }),
+
+  tool({
+    name: 'dialogs_cancel_scheduled',
+    title: 'Отменить продолжение диалога',
+    kind: 'danger',
+    description: 'Отменяет одно отложенное действие из dialogs_get для указанного диалога.',
+    input: { case: caseField, dialog: dialogField,
+      task_id: z.string().uuid().describe('ID отложенного действия из dialogs_get.') },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const result = await ctx.api.delete<{ message: string }>(
+        `/cases/${found.id}/dialogs/${dialog.id}/scheduled/${args.task_id}`,
+      );
+      return result.message;
     },
   }),
 
@@ -1045,6 +1260,7 @@ export const dialogTools: Tool[] = [
         .optional()
         .describe('Какую заготовку править: название или идентификатор. Не указывайте для новой.'),
       title: z.string().max(80).optional().describe('Название заготовки.'),
+      parse_mode: parseMode,
       text: z
         .string()
         .min(1)
@@ -1062,13 +1278,13 @@ export const dialogTools: Tool[] = [
         if (!args.text) return 'Чтобы завести заготовку, нужен её текст.';
         const created = await ctx.api.post<Reply>(
           `/cases/${found.id}/replies`,
-          body({ title: args.title, text: args.text }),
+          body({ title: args.title, text: args.text, parse_mode: args.parse_mode }),
         );
         return report('Заготовка сохранена.', showReply(created));
       }
 
       const existing = await findReply(ctx, found.id, args.reply);
-      const payload = body({ title: args.title, text: args.text });
+      const payload = body({ title: args.title, text: args.text, parse_mode: args.parse_mode });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 
       const updated = await ctx.api.patch<Reply>(
@@ -1112,20 +1328,103 @@ export const dialogTools: Tool[] = [
       'failed — не с чего было начать.',
     input: {
       case: caseField,
+      status: z.enum(['', 'live', 'draft', 'done', 'failed']).optional()
+        .describe('live — scheduled/running; done — done/cancelled; draft и failed отдельно.'),
+      bot: botField.optional().describe('Отобрать рассылки этого бота.'),
+      q: z.string().max(120).optional().describe('Подстрока названия или текста.'),
       limit: limitField(100, 30),
       offset: z.number().int().min(0).optional().describe('Сколько записей пропустить.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
+      const bot = args.bot ? await ctx.resolveBot(found.id, args.bot) : null;
       const page = await ctx.api.get<Page<Broadcast>>(`/cases/${found.id}/broadcasts`, {
         limit: args.limit,
         offset: args.offset,
+        status: args.status,
+        bot_id: bot?.id,
+        q: args.q,
       });
 
       return report(
         `Рассылки дела «${found.name}» — ${pageFooter(page)}`,
         page.items.map(showBroadcast),
       );
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_get',
+    title: 'Открыть рассылку',
+    kind: 'read',
+    description: 'Текст, кнопки по рядам, вложение, условия отбора и состояние рассылки.',
+    input: { case: caseField, broadcast: broadcastField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      return report(`Рассылка «${item.title}»`, showBroadcast(item));
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_targets',
+    title: 'Отчёт по получателям рассылки',
+    kind: 'read',
+    description: 'Кому дошло, кому нет и почему. Фильтры и страницы обрабатывает панель.',
+    input: {
+      case: caseField, broadcast: broadcastField,
+      status: z.enum(['', 'pending', 'sent', 'failed', 'skipped']).optional(),
+      q: z.string().max(120).optional().describe('Подстрока имени или ника получателя.'),
+      limit: limitField(200, 50),
+      offset: z.number().int().min(0).optional(),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      const page = await ctx.api.get<Page<BroadcastTarget>>(
+        `/cases/${found.id}/broadcasts/${item.id}/targets`,
+        { status: args.status, q: args.q, limit: args.limit, offset: args.offset },
+      );
+      return report(`Получатели рассылки «${item.title}»`, {
+        получатели: page.items, страница: pageFooter(page),
+      });
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_attach',
+    title: 'Приложить файл к рассылке',
+    kind: 'write',
+    description: 'Прикладывает локальный файл к черновику или ещё не начавшейся рассылке.',
+    input: {
+      case: caseField, broadcast: broadcastField,
+      file_path: z.string().min(1).describe('Путь к локальному файлу, до 20 МиБ.'),
+      content_type: z.string().min(1).optional().describe('MIME; без него определяется по имени.'),
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      const path = `/cases/${found.id}/broadcasts/${item.id}/attachment`;
+      const saved = args.content_type === undefined
+        ? await ctx.api.upload<Broadcast>(path, args.file_path)
+        : await ctx.api.upload<Broadcast>(path, args.file_path, {}, args.content_type);
+      return report('Вложение добавлено.', showBroadcast(saved));
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_detach',
+    title: 'Снять вложение рассылки',
+    kind: 'write',
+    description: 'Снимает вложение черновика или ещё не начавшейся рассылки.',
+    input: { case: caseField, broadcast: broadcastField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      const saved = await ctx.api.delete<Broadcast>(
+        `/cases/${found.id}/broadcasts/${item.id}/attachment`,
+      );
+      return report('Вложение снято.', showBroadcast(saved));
     },
   }),
 
@@ -1155,6 +1454,8 @@ export const dialogTools: Tool[] = [
         .enum(['', 'HTML'])
         .optional()
         .describe('HTML — разметка сообщения. Пусто — обычный текст. По умолчанию пусто.'),
+      buttons: buttonRows,
+      audience: audienceSchema,
       ...audienceInput,
     },
     async run(args, ctx) {
@@ -1168,6 +1469,7 @@ export const dialogTools: Tool[] = [
           bot_id: bot.id,
           text: args.text,
           parse_mode: args.parse_mode,
+          buttons: args.buttons,
           audience,
         }),
       );
@@ -1194,7 +1496,8 @@ export const dialogTools: Tool[] = [
       'Без параметра broadcast заводит черновик — он никуда не уходит, пока его не запустят ' +
       '(broadcasts_start). С параметром broadcast правит черновик, а также рассылку, ' +
       'поставленную на срок и ещё не ушедшую. Начавшуюся правкой уже не догнать — её ' +
-      'останавливают через broadcasts_cancel. Условия отбора при правке заменяются целиком теми, что переданы, ' +
+      'останавливают через broadcasts_cancel. Бота меняют, только сняв вложение. ' +
+      'Условия отбора при правке заменяются целиком теми, что переданы, ' +
       'а не дополняются; не передали ни одного — прежние остаются. Разметку HTML панель ' +
       'проверяет здесь же: платформа отбила бы сообщение с незакрытым тегом сразу у всех.',
     input: {
@@ -1208,7 +1511,7 @@ export const dialogTools: Tool[] = [
         .optional()
         .describe(
           'Бот, от имени которого уйдёт сообщение: название, @username или идентификатор. ' +
-            'Нужен для новой рассылки; у заведённой бота не меняют.',
+            'Нужен для новой рассылки; у черновика можно сменить, если нет вложения.',
         ),
       title: z
         .string()
@@ -1228,28 +1531,9 @@ export const dialogTools: Tool[] = [
         .enum(['', 'HTML'])
         .optional()
         .describe('HTML — разметка сообщения. Пусто — обычный текст.'),
-      buttons: z
-        .array(
-          z
-            .array(
-              z.object({
-                text: z.string().min(1).max(64).describe('Надпись на кнопке.'),
-                url: z
-                  .string()
-                  .max(512)
-                  .describe('Адрес: https://, http://, tg:// или mailto:'),
-              }),
-            )
-            .max(3),
-        )
-        .max(6)
-        .optional()
-        .describe(
-          'Кнопки под сообщением: ряды не больше чем по три, рядов не больше шести. ' +
-            'Только ссылки — на нажатие в рассылке отвечать некому.',
-        ),
+      buttons: buttonRows,
       run_at: z
-        .string()
+        .iso.datetime({ offset: true, local: true })
         .nullable()
         .optional()
         .describe(
@@ -1257,20 +1541,21 @@ export const dialogTools: Tool[] = [
             'null убирает ранее назначенный срок.',
         ),
       ...audienceInput,
+      audience: audienceSchema,
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const audience = await buildAudience(ctx, found.id, args);
+      const bot = args.bot ? await ctx.resolveBot(found.id, args.bot) : null;
 
       if (!args.broadcast) {
         if (!args.bot || !args.text) {
           return 'Чтобы завести рассылку, нужны бот и текст сообщения.';
         }
-        const bot = await ctx.resolveBot(found.id, args.bot);
         const created = await ctx.api.post<Broadcast>(
           `/cases/${found.id}/broadcasts`,
           body({
-            bot_id: bot.id,
+            bot_id: bot!.id,
             title: args.title,
             text: args.text,
             parse_mode: args.parse_mode,
@@ -1292,19 +1577,17 @@ export const dialogTools: Tool[] = [
         });
       }
 
-      if (args.bot) {
-        return 'Бота у заведённой рассылки не меняют — заведите новую без параметра broadcast.';
-      }
-
       const existing = await findBroadcast(ctx, found.id, args.broadcast);
       const payload = body({
+        bot_id: bot?.id,
         title: args.title,
         text: args.text,
         parse_mode: args.parse_mode,
         buttons: args.buttons,
         // Пустой отбор в правке значил бы «слать всем»: не передали ни
         // одного условия — оставляем прежние.
-        audience: Object.keys(audience).length > 0 ? audience : undefined,
+        audience: args.audience !== undefined || Object.keys(audience).length > 0
+          ? audience : undefined,
         run_at: args.run_at,
       });
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
@@ -1314,6 +1597,77 @@ export const dialogTools: Tool[] = [
         payload,
       );
       return report('Рассылка обновлена.', showBroadcast(updated));
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_duplicate',
+    title: 'Скопировать рассылку в черновик',
+    kind: 'write',
+    description: 'Копия не отправляется. only_missed исключает тех, кто получил исходную рассылку.',
+    input: { case: caseField, broadcast: broadcastField,
+      only_missed: z.boolean().optional().describe('Исключить уже получивших. По умолчанию нет.') },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      const copy = await ctx.api.post<Broadcast>(
+        `/cases/${found.id}/broadcasts/${item.id}/duplicate`,
+        { only_missed: args.only_missed ?? false },
+      );
+      return report('Создан черновик-копия.', showBroadcast(copy));
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_retry',
+    title: 'Повторить рассылку недошедшим',
+    kind: 'danger',
+    description: 'Повторно отправляет недошедшие сообщения. Уже получившие не получают второй раз.',
+    input: { case: caseField, broadcast: broadcastField, confirm_name: broadcastConfirm },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      confirmBroadcast(item, args.confirm_name);
+      const saved = await ctx.api.post<Broadcast>(
+        `/cases/${found.id}/broadcasts/${item.id}/retry`,
+      );
+      return report('Повторная отправка запущена.', showBroadcast(saved));
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_test',
+    title: 'Отправить пробу рассылки',
+    kind: 'danger',
+    description: 'Реально отправляет одно сообщение в выбранный диалог от имени бота рассылки.',
+    input: { case: caseField, broadcast: broadcastField, dialog: dialogField,
+      confirm_name: broadcastConfirm },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      confirmBroadcast(item, args.confirm_name);
+      const dialog = await findDialog(ctx, found.id, args.dialog);
+      const result = await ctx.api.post<{ message: string }>(
+        `/cases/${found.id}/broadcasts/${item.id}/test`, { dialog_id: dialog.id },
+      );
+      return report(result.message, { получатель: dialog.contact_name, диалог: dialog.id });
+    },
+  }),
+
+  tool({
+    name: 'broadcasts_delete',
+    title: 'Удалить рассылку',
+    kind: 'danger',
+    description: 'Удаляет рассылку и отчёт. Идущую сначала остановите; отправленное не отзывается.',
+    input: { case: caseField, broadcast: broadcastField, confirm_name: broadcastConfirm },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const item = await findBroadcast(ctx, found.id, args.broadcast);
+      confirmBroadcast(item, args.confirm_name);
+      const result = await ctx.api.delete<{ message: string }>(
+        `/cases/${found.id}/broadcasts/${item.id}`,
+      );
+      return result.message;
     },
   }),
 
@@ -1357,8 +1711,8 @@ export const dialogTools: Tool[] = [
     kind: 'write',
     description:
       'Останавливает рассылку: то, что ещё не ушло, не уйдёт. Отправленное вернуть нельзя, ' +
-      'и продолжить остановленную тоже — запускают только черновик, так что для повтора ' +
-      'придётся составить новую. Счётчики остаются: по ним видно, скольким успело уйти.',
+      'счётчики остаются. Повторить неудачные отправки — broadcasts_retry; составить ' +
+      'новый черновик из этой рассылки — broadcasts_duplicate.',
     input: {
       case: caseField,
       broadcast: z.string().describe('Рассылка: название или идентификатор.'),

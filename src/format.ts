@@ -7,10 +7,10 @@
  */
 
 /** Поля, которые ничего не добавляют модели и только занимают место. */
-const NOISE = new Set(['avatar_url', 'initials', 'appearance', 'accent_hint']);
+const NOISE = new Set(['initials', 'accent_hint']);
 
 /** Ключи-секреты: их не показываем, даже если панель вернула значение. */
-const SECRET = /token|secret|password|api_key/i;
+const SECRET = /password|secret|api[_-]?key|credentials|authorization|(?:^|[_-])token$/i;
 
 /** С чего начинается замаскированное значение. */
 export const MASK = '···';
@@ -83,8 +83,8 @@ export function render(value: unknown, indent = 0): string {
   return entries
     .map(([key, item]) => {
       const label = `${pad}${key}:`;
-      if (SECRET.test(key) && typeof item === 'string' && item.length > 12) {
-        return `${label} ${MASK}${item.slice(-4)}`;
+      if (SECRET.test(key) && (typeof item === 'string' || typeof item === 'object')) {
+        return `${label} ${MASK}`;
       }
       if (isScalar(item)) return `${label} ${scalar(item)}`;
       if (Array.isArray(item) && item.every(isScalar)) return `${label} ${item.join(', ')}`;

@@ -3,13 +3,15 @@
  */
 
 import { z } from 'zod';
+import { open } from 'node:fs/promises';
+import { requireLocalPath } from '../api.js';
 
-import { TOKEN_PREFIX } from '../auth.js';
 import { PACKAGE_NAME, normalizeBaseUrl } from '../config.js';
 import { removeProfile, withCredentialsLock } from '../credentials.js';
 import { PERMISSIONS } from '../enums.js';
+import { ApiError } from '../errors.js';
 import { report } from '../format.js';
-import { tool, type Tool } from './kit.js';
+import { body, tool, type Tool } from './kit.js';
 
 interface Session {
   id: string;
@@ -19,6 +21,17 @@ interface Session {
   expires_at: string;
 }
 
+/** Секреты вводят вне MCP: файл читает только локальный сервер. */
+async function readSecretFile(path: string): Promise<string> {
+  requireLocalPath(path);
+  const file = await open(path, 'r');
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size > 16 * 1024) throw new ApiError(400, 'invalid_secret_file', 'Нужен обычный файл размером до 16 КБ.');
+    return await file.readFile('utf8');
+  } finally { await file.close(); }
+}
+
 export const accountTools: Tool[] = [
   tool({
     name: 'operbots_login',
@@ -26,22 +39,25 @@ export const accountTools: Tool[] = [
     kind: 'write',
     session: true,
     description:
-      'Открывает окно для адреса панели и токена доступа. Токен выпускается в самой панели: ' +
+      'Проверяет доступ или подключается по токену из локального token_file. Токен выпускается в самой панели: ' +
       'аккаунт → Интеграции → «Выпустить токен», и показывается там один раз. ' +
-      'Вводит его человек, в переписку он не попадает. Вызывайте, когда другие инструменты ' +
+      'Человек вводит его через CLI login или локальный файл; формы MCP не запрашивают секреты. Вызывайте, когда другие инструменты ' +
       'сообщают, что доступ не настроен или токен больше не действует.',
     input: {
       url: z
         .string()
         .optional()
-        .describe('Адрес панели, если он известен. Иначе его спросят в окне.'),
+        .describe('Адрес панели. По умолчанию сохранённый адрес или http://localhost:8080.'),
       switch_account: z
         .boolean()
         .optional()
         .describe('Подключиться заново, даже если доступ уже настроен.'),
+      token_file: z.string().optional().describe('Абсолютный путь к UTF-8 файлу с токеном. Значение читает локальный сервер, в переписку оно не попадает.'),
     },
     async run(args, ctx) {
-      if (!args.switch_account && (await ctx.auth.signedIn())) {
+      ctx.auth.forget();
+      ctx.forgetCases();
+      if (!args.switch_account && !args.token_file && (await ctx.auth.signedIn())) {
         try {
           const me = await ctx.auth.whoami();
           return (
@@ -55,47 +71,18 @@ export const accountTools: Tool[] = [
 
       const suggested = args.url ?? (await ctx.auth.knownBaseUrl()) ?? 'http://localhost:8080';
 
-      if (!ctx.prompter?.available()) {
+      if (!args.token_file) {
         return (
-          'Этот клиент не умеет показывать окно ввода. Выполните в терминале:\n' +
+          'Выполните в терминале (токен вводится скрыто):\n' +
           `  npx ${PACKAGE_NAME} login\n` +
           `либо задайте переменные окружения OPERBOTS_URL и OPERBOTS_TOKEN.\n` +
           `Токен выпускается в панели: ${suggested}/dashboard/account → Интеграции.`
         );
       }
 
-      const answer = await ctx.prompter.form(
-        'Подключение к панели operbots. Токен выпускается в самой панели: ' +
-          'аккаунт → Интеграции → «Выпустить токен». Он попадёт только на диск этой машины, ' +
-          'в переписку с моделью — нет.',
-        {
-          url: {
-            type: 'string',
-            title: 'Адрес панели',
-            description: 'Например https://panel.example.com',
-            default: suggested,
-            format: 'uri',
-          },
-          token: {
-            type: 'string',
-            title: 'Токен доступа',
-            description: `Начинается с ${TOKEN_PREFIX}`,
-            minLength: 1,
-          },
-        },
-        ['url', 'token'],
-      );
-
-      if (answer.action === 'decline') return 'Подключение отклонено.';
-      if (answer.action !== 'accept') return 'Окно закрыто, доступ не настроен.';
-
-      const url = String(answer.content?.url ?? '').trim();
-      const token = String(answer.content?.token ?? '').trim();
-      if (!url || !token) return 'Не настроено: заполнены не все поля.';
-
-      const base = normalizeBaseUrl(url);
+      const token = (await readSecretFile(args.token_file)).trim();
+      const base = normalizeBaseUrl(suggested);
       const user = await ctx.auth.signIn(base, token);
-      ctx.forgetCases();
 
       const cases = await ctx.caseList(true).catch(() => []);
       return report(`Подключено: ${user.display_name} <${user.email}>`, {
@@ -132,6 +119,8 @@ export const accountTools: Tool[] = [
       const removed = await withCredentialsLock(ctx.config.credentialsPath, () =>
         removeProfile(ctx.config.credentialsPath, base),
       );
+      ctx.config.baseUrl = base;
+      ctx.config.token = null;
       ctx.auth.forget();
       ctx.forgetCases();
 
@@ -168,6 +157,7 @@ export const accountTools: Tool[] = [
       }));
 
       return report(`${me.display_name} <${me.email}> — панель ${base}`, {
+        профиль: me,
         профиль_заполнен: me.profile_completed,
         часовой_пояс: me.timezone,
         суперпользователь: me.is_superuser || undefined,
@@ -208,9 +198,16 @@ export const accountTools: Tool[] = [
       'Завершает сессию по идентификатору из sessions_list — устройство выкинет из панели. ' +
       'На токены доступа не влияет.',
     input: {
-      session_id: z.string().describe('Идентификатор сессии из sessions_list.'),
+      session_id: z.uuid().optional().describe('Идентификатор сессии из sessions_list.'),
+      all: z.boolean().optional().describe('true — завершить входы на всех устройствах. Токены интеграций продолжают действовать.'),
     },
     async run(args, ctx) {
+      if (args.all && args.session_id) throw new ApiError(400, 'invalid_selection', 'Укажите session_id или all=true, а не оба.');
+      if (args.all) {
+        await ctx.api.post('/auth/logout-all');
+        return 'Сессии на всех устройствах завершены.';
+      }
+      if (!args.session_id) throw new ApiError(400, 'selection_required', 'Укажите session_id или all=true.');
       await ctx.api.delete(`/auth/sessions/${args.session_id}`);
       return `Сессия ${args.session_id} завершена.`;
     },
@@ -227,15 +224,17 @@ export const accountTools: Tool[] = [
       'те поля, которые нужно изменить: остальные останутся как есть. Этим же инструментом ' +
       'проходят шаг знакомства: пока фамилии, имени и даты рождения нет, API закрыт целиком.',
     input: {
-      last_name: z.string().max(80).optional().describe('Фамилия.'),
-      first_name: z.string().max(80).optional().describe('Имя.'),
-      middle_name: z.string().max(80).optional().describe('Отчество.'),
+      last_name: z.string().max(80).nullable().optional().describe('Фамилия.'),
+      first_name: z.string().max(80).nullable().optional().describe('Имя.'),
+      middle_name: z.string().max(80).nullable().optional().describe('Отчество.'),
       birth_date: z
         .string()
+        .nullable()
         .optional()
         .describe('Дата рождения в виде ГГГГ-ММ-ДД. Без неё профиль считается незаполненным.'),
-      phone: z.string().max(32).optional().describe('Телефон.'),
-      timezone: z.string().max(64).optional().describe('Часовой пояс, например Europe/Moscow.'),
+      phone: z.string().max(32).nullable().optional().describe('Телефон.'),
+      timezone: z.string().max(64).nullable().optional().describe('Часовой пояс, например Europe/Moscow.'),
+      avatar_url: z.url().nullable().optional().describe('Адрес аватара; null — удалить.'),
       telegram_id: z
         .number()
         .int()
@@ -269,4 +268,38 @@ export const accountTools: Tool[] = [
       });
     },
   }),
+
+  tool({ name: 'account_appearance', title: 'Оформление панели', kind: 'write',
+    description: 'Меняет язык, тему, акцент, плотность и анимации панели. Пропущенные настройки сохраняет.',
+    input: { locale: z.enum(['ru', 'en']).optional(), mode: z.enum(['light', 'dark', 'auto']).optional(),
+      accent: z.string().optional(), custom_hue: z.number().int().min(0).max(360).nullable().optional(),
+      glass_intensity: z.number().min(0).max(1).optional(), motion: z.enum(['full', 'reduced', 'off']).optional(),
+      density: z.enum(['comfortable', 'compact']).optional(), sidebar_collapsed: z.boolean().optional() },
+    async run(args, ctx) {
+      const previous = await ctx.api.get<{ appearance: Record<string, unknown> }>('/users/me');
+      const updated = await ctx.api.put<{ appearance: Record<string, unknown> }>('/users/me/appearance', { ...previous.appearance, ...body(args) });
+      return report('Оформление сохранено.', updated.appearance);
+    } }),
+  tool({ name: 'account_password', title: 'Изменить пароль', kind: 'danger',
+    description: 'Меняет пароль из локального JSON-файла с current_password и new_password, созданного человеком вне MCP. Пароли не запрашиваются через формы MCP, не попадают в аргументы или ответ. Прежние браузерные сессии завершаются.',
+    input: { password_file: z.string().describe('Абсолютный путь к локальному JSON с current_password и new_password. После смены удалите файл.') }, async run(args, ctx) {
+      let payload: { current_password: string; new_password: string };
+      try {
+        payload = z.object({ current_password: z.string().min(1), new_password: z.string().min(8).max(128) }).strict().parse(JSON.parse(await readSecretFile(args.password_file)));
+      } catch {
+        throw new ApiError(400, 'invalid_password_file', 'Не удалось прочитать пароль: нужен локальный JSON с current_password и new_password длиной 8–128 знаков.');
+      }
+      const result = await ctx.api.post<{ message: string }>('/users/me/password', payload);
+      return result.message;
+    } }),
+  tool({ name: 'users_search', title: 'Найти человека для приглашения', kind: 'read',
+    description: 'Поиск пользователей по имени или почте. Сервер скрывает чужие полные адреса и номера платформ.',
+    input: { query: z.string().trim().min(3).max(120) }, async run(args, ctx) {
+      return report('Найденные пользователи.', await ctx.api.get('/users/search', { query: args.query }));
+    } }),
+  tool({ name: 'account_security', title: 'Безопасность и токены аккаунта', kind: 'read',
+    description: 'Ссылка на управление вторым фактором, кодами восстановления и интеграционными токенами. Эти операции требуют браузерной сессии: токен интеграции не может выпускать новые токены или менять второй фактор.',
+    input: { section: z.enum(['security', 'integrations']).optional() }, async run(args, ctx) {
+      return report('Откройте панель и выполните вход в браузере.', { url: `${await ctx.auth.baseUrl()}/dashboard/account?tab=${args.section ?? 'security'}` });
+    } }),
 ];

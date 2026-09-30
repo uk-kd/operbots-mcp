@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 
-import type { Context } from '../context.js';
+import { pickByName, type Context } from '../context.js';
 import { PERMISSIONS, ROLE_PRESETS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { report } from '../format.js';
@@ -15,9 +15,11 @@ import { caseField, body, optional, tool, type Tool } from './kit.js';
 
 interface Role {
   id: string;
+  case_id: string;
   slug: string;
   name: string;
   description: string | null;
+  accent: string;
   permissions: string[];
   is_system: boolean;
   position: number;
@@ -26,7 +28,9 @@ interface Role {
 
 interface Member {
   id: string;
-  user: { id: string; email: string; display_name: string; full_name: string };
+  case_id: string;
+  user: { id: string; email: string; display_name: string; full_name: string;
+    initials: string; avatar_url: string | null; telegram_id: number | null; max_id: number | null };
   role: Role | null;
   is_owner: boolean;
   extra_permissions: string[];
@@ -34,70 +38,78 @@ interface Member {
   effective_permissions: string[];
   note: string | null;
   last_seen_at: string | null;
+  created_at: string;
 }
 
 interface Invite {
   id: string;
+  case_id: string;
   email: string | null;
   role: Role | null;
   url: string;
   expires_at: string;
   max_uses: number;
   uses: number;
+  accepted_at: string | null;
+  created_at: string;
 }
 
 const permission = z.enum(PERMISSIONS);
+const inviteToken = z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Токен из ссылки-приглашения, без адреса и пути.');
 
 async function findRole(ctx: Context, caseId: string, hint: string): Promise<Role> {
   const roles = await ctx.api.get<Role[]>(`/cases/${caseId}/roles`);
   const needle = hint.trim().toLowerCase();
-
-  const match =
-    roles.find((role) => role.id === hint) ??
-    roles.find((role) => role.slug.toLowerCase() === needle) ??
-    roles.find((role) => role.name.toLowerCase() === needle) ??
-    roles.find((role) => role.name.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'role_not_found',
-      `Роли «${hint}» нет в деле. Есть: ${roles.map((role) => `${role.name} (${role.slug})`).join(', ')}`,
-    );
-  }
-  return match;
+  return roles.find((role) => role.id === hint.trim())
+    ?? roles.find((role) => role.slug.toLowerCase() === needle)
+    ?? pickByName(roles, hint);
 }
 
 export async function findMember(ctx: Context, caseId: string, hint: string): Promise<Member> {
   const members = await ctx.api.get<Member[]>(`/cases/${caseId}/members`);
   const needle = hint.trim().toLowerCase();
 
-  const match =
-    members.find((item) => item.id === hint) ??
-    members.find((item) => item.user.id === hint) ??
-    members.find((item) => item.user.email.toLowerCase() === needle) ??
-    members.find((item) => item.user.display_name.toLowerCase() === needle) ??
-    members.find((item) => item.user.full_name.toLowerCase().includes(needle));
-
-  if (!match) {
-    throw new ApiError(
-      404,
-      'member_not_found',
-      `Участника «${hint}» в деле нет. Есть: ${members.map((item) => `${item.user.display_name} <${item.user.email}>`).join('; ')}`,
-    );
-  }
-  return match;
+  return members.find((item) => item.id === hint.trim() || item.user.id === hint.trim())
+    ?? members.find((item) => item.user.email.toLowerCase() === needle)
+    ?? pickByName(members.map((item) => ({ ...item,
+      name: item.user.display_name.toLowerCase() === needle || !item.user.full_name.toLowerCase().includes(needle)
+        ? item.user.display_name : item.user.full_name,
+    })), hint);
 }
 
 const showRole = (role: Role) => ({
   роль: role.name,
   идентификатор: role.id,
+  дело: role.case_id,
   короткое_имя: role.slug,
   описание: role.description,
+  цвет: role.accent,
+  позиция: role.position,
   системная: role.is_system || undefined,
   участников: role.members_count,
   прав: role.permissions.length,
   права: role.permissions,
+});
+
+const showMember = (item: Member, withPermissions = true) => ({
+  человек: `${item.user.display_name} <${item.user.email}>`,
+  участие: item.id,
+  дело: item.case_id,
+  пользователь: item.user.id,
+  полное_имя: item.user.full_name,
+  инициалы: item.user.initials,
+  аватар: item.user.avatar_url,
+  telegram_id: item.user.telegram_id,
+  max_id: item.user.max_id,
+  роль: item.is_owner ? 'владелец' : (item.role?.name ?? 'без роли'),
+  идентификатор_роли: item.role?.id,
+  прав: item.effective_permissions.length,
+  выдано_дополнительно: item.extra_permissions,
+  отозвано: item.revoked_permissions,
+  права: withPermissions ? item.effective_permissions : undefined,
+  пометка: item.note,
+  создан: item.created_at,
+  был_в_деле: item.last_seen_at,
 });
 
 export const peopleTools: Tool[] = [
@@ -128,27 +140,12 @@ export const peopleTools: Tool[] = [
         участники:
           typeof members === 'string'
             ? members
-            : members.map((item) => ({
-                человек: `${item.user.display_name} <${item.user.email}>`,
-                участие: item.id,
-                роль: item.is_owner ? 'владелец' : (item.role?.name ?? 'без роли'),
-                прав: item.effective_permissions.length,
-                выдано_дополнительно: item.extra_permissions.length ? item.extra_permissions : undefined,
-                отозвано: item.revoked_permissions.length ? item.revoked_permissions : undefined,
-                права: args.with_permissions ? item.effective_permissions : undefined,
-                пометка: item.note,
-                был_в_деле: item.last_seen_at,
-              })),
+            : members.map((item) => showMember(item, args.with_permissions ?? false)),
         роли:
           typeof roles === 'string'
             ? roles
             : roles.map((role) => ({
-                роль: role.name,
-                идентификатор: role.id,
-                короткое_имя: role.slug,
-                системная: role.is_system || undefined,
-                участников: role.members_count,
-                прав: role.permissions.length,
+                ...showRole(role),
                 права: args.with_permissions ? role.permissions : undefined,
               })),
         приглашения:
@@ -158,11 +155,15 @@ export const peopleTools: Tool[] = [
               ? 'нет действующих'
               : invites.map((invite) => ({
                   идентификатор: invite.id,
+                  дело: invite.case_id,
                   для: invite.email ?? 'для любого по ссылке',
                   роль: invite.role?.name ?? 'по умолчанию',
+                  идентификатор_роли: invite.role?.id,
                   ссылка: invite.url,
                   использовано: `${invite.uses} из ${invite.max_uses}`,
                   действует_до: invite.expires_at,
+                  принято: invite.accepted_at,
+                  создано: invite.created_at,
                 })),
       });
     },
@@ -185,10 +186,11 @@ export const peopleTools: Tool[] = [
       email: z.string().optional().describe('Почта того, кого добавляем в дело.'),
       role: z
         .string()
+        .nullable()
         .optional()
         .describe(
           `Роль: название, короткое имя или идентификатор. Готовые: ${ROLE_PRESETS.join(', ')}. ` +
-            'По умолчанию при добавлении назначается «оператор».',
+            'По умолчанию при добавлении назначается «оператор». null — снять роль.',
         ),
       extra_permissions: z
         .array(permission)
@@ -198,44 +200,42 @@ export const peopleTools: Tool[] = [
         .array(permission)
         .optional()
         .describe('Права, отбираемые у участника вопреки роли. Заменяет прежний список целиком.'),
-      note: z.string().max(240).optional().describe('Служебная пометка об участнике.'),
+      note: z.string().max(240).nullable().optional().describe('Служебная пометка об участнике. null — стереть.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
       const role = args.role ? await findRole(ctx, found.id, args.role) : null;
+      const roleId = args.role === null ? null : role?.id;
 
       if (!args.member) {
         if (!args.email) return 'Чтобы добавить человека, нужна его почта.';
         const created = await ctx.api.post<Member>(
           `/cases/${found.id}/members`,
-          body({ email: args.email, role_id: role?.id, note: args.note }),
+          body({ email: args.email, role_id: roleId, note: args.note }),
         );
-        return report('Участник добавлен.', {
-          человек: `${created.user.display_name} <${created.user.email}>`,
-          участие: created.id,
-          роль: created.role?.name ?? 'без роли',
-          прав: created.effective_permissions.length,
+        const changes = body({
+          // При создании backend назначает роль по умолчанию даже при null.
+          role_id: args.role === null ? null : undefined,
+          extra_permissions: args.extra_permissions,
+          revoked_permissions: args.revoked_permissions,
         });
+        const saved = Object.keys(changes).length > 0
+          ? await ctx.api.patch<Member>(`/cases/${found.id}/members/${created.id}`, changes) : created;
+        return report('Участник добавлен.', showMember(saved));
       }
 
       const member = await findMember(ctx, found.id, args.member);
       const updated = await ctx.api.patch<Member>(
         `/cases/${found.id}/members/${member.id}`,
         body({
-          role_id: role?.id,
+          role_id: roleId,
           extra_permissions: args.extra_permissions,
           revoked_permissions: args.revoked_permissions,
           note: args.note,
         }),
       );
 
-      return report('Права участника обновлены.', {
-        человек: `${updated.user.display_name} <${updated.user.email}>`,
-        роль: updated.is_owner ? 'владелец' : (updated.role?.name ?? 'без роли'),
-        выдано_дополнительно: updated.extra_permissions,
-        отозвано: updated.revoked_permissions,
-        итоговые_права: updated.effective_permissions,
-      });
+      return report('Права участника обновлены.', showMember(updated));
     },
   }),
 
@@ -302,7 +302,8 @@ export const peopleTools: Tool[] = [
         .optional()
         .describe('Скопировать эту роль (обычно готовый пресет), чтобы править копию.'),
       name: z.string().min(2).max(80).optional().describe('Название роли.'),
-      description: z.string().max(1000).optional().describe('Описание роли.'),
+      slug: z.string().max(64).nullable().optional().describe('Короткое имя новой роли. После создания его сменить нельзя.'),
+      description: z.string().max(1000).nullable().optional().describe('Описание роли. null — стереть.'),
       accent: z.string().max(24).optional().describe('Цвет метки роли.'),
       permissions: z
         .array(permission)
@@ -311,6 +312,9 @@ export const peopleTools: Tool[] = [
       position: z.number().int().optional().describe('Порядок в списке ролей.'),
     },
     async run(args, ctx) {
+      if (args.slug !== undefined && (args.role || args.copy_of)) {
+        throw new ApiError(400, 'slug_create_only', 'Короткое имя можно задать только при создании новой роли.');
+      }
       const found = await ctx.resolveCase(args.case);
       const changes = body({
         name: args.name,
@@ -335,11 +339,12 @@ export const peopleTools: Tool[] = [
         // Порядок при заведении панель не принимает — только правкой,
         // иначе position терялся бы молча.
         const { position: _, ...fresh } = changes;
-        const created = await ctx.api.post<Role>(`/cases/${found.id}/roles`, {
+        const created = await ctx.api.post<Role>(`/cases/${found.id}/roles`, body({
           name: args.name,
           ...fresh,
+          slug: args.slug,
           permissions: args.permissions ?? [],
-        });
+        }));
         const placed =
           args.position === undefined
             ? created
@@ -427,7 +432,34 @@ export const peopleTools: Tool[] = [
         роль: invite.role?.name ?? 'по умолчанию',
         использований: invite.max_uses,
         действует_до: invite.expires_at,
+        принято: invite.accepted_at,
+        создано: invite.created_at,
       });
+    },
+  }),
+
+  tool({
+    name: 'invites_get',
+    title: 'Посмотреть приглашение',
+    kind: 'read',
+    description: 'Показывает дело, роль и состояние приглашения по токену из ссылки до вступления.',
+    input: { token: inviteToken },
+    async run(args, ctx) {
+      const preview = await ctx.api.get<Record<string, unknown>>(`/cases/invites/${args.token}`);
+      return report('Приглашение в дело', preview);
+    },
+  }),
+
+  tool({
+    name: 'invites_accept',
+    title: 'Принять приглашение',
+    kind: 'write',
+    description: 'Вступает в дело от имени текущего пользователя по токену из ссылки-приглашения.',
+    input: { token: inviteToken },
+    async run(args, ctx) {
+      const joined = await ctx.api.post<Record<string, unknown>>(`/cases/invites/${args.token}/accept`);
+      ctx.forgetCases();
+      return report('Приглашение принято.', joined);
     },
   }),
 
