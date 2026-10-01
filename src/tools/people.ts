@@ -120,7 +120,7 @@ export const peopleTools: Tool[] = [
     description:
       'Кто состоит в деле, с какой ролью и какими итоговыми правами; какие роли заведены ' +
       'в деле и какие ссылки-приглашения действуют. Разделы, на которые не хватает прав, ' +
-      'помечаются как недоступные.',
+      'помечаются как недоступные. Ссылки приглашений видны только с правом member.invite.',
     input: {
       case: caseField,
       with_permissions: z
@@ -159,7 +159,7 @@ export const peopleTools: Tool[] = [
                   для: invite.email ?? 'для любого по ссылке',
                   роль: invite.role?.name ?? 'по умолчанию',
                   идентификатор_роли: invite.role?.id,
-                  ссылка: invite.url,
+                  ссылка: invite.url || 'Скрыта: требуется право member.invite.',
                   использовано: `${invite.uses} из ${invite.max_uses}`,
                   действует_до: invite.expires_at,
                   принято: invite.accepted_at,

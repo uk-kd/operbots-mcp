@@ -194,6 +194,31 @@ test('member lists expose user and role metadata and invite acceptance dates', a
     'telegram_id: 123', 'max_id: 456', 'принято', at]) assert.ok(output.includes(expected), expected);
 });
 
+test('member list explains an invitation link redacted by the current backend', async () => {
+  const hidden = { ...invite, token: '', url: '' };
+  const h = harness((_method, path) => path.endsWith('/members') ? [member]
+    : path.endsWith('/roles') ? [role] : [hidden]);
+  const output = await h.run('members_list', {});
+  assert.ok(output.includes(invite.id));
+  assert.ok(output.includes('member.invite'));
+  assert.ok(!output.includes(invite.url));
+  assert.ok(!output.includes(invite.token));
+  assert.equal(h.calls.length, 3);
+});
+
+for (const active of [true, false]) {
+  test(`market installation reports the actual activation state: ${active}`, async () => {
+    const flow = { id: 'installed-flow', bot_id: B, name: 'Installed', scope: 'dialog',
+      is_active: active, version: 1, graph: { nodes: [], edges: [] }, problems: [] };
+    const h = harness((method, path) => method === 'post' && path.endsWith('/install')
+      ? { flow, warnings: [] } : item);
+    const output = await h.run('market_install', { bot: 'Bot', item: item.id });
+    assert.equal(output.includes('В работу не включён'), !active);
+    if (active) assert.ok(output.includes('включён в работу'));
+    assert.equal(h.calls.filter(call => call.method === 'post').length, 1);
+  });
+}
+
 test('invite preview and acceptance use token-specific routes and reject path syntax', async () => {
   const h = harness(method => method === 'get'
     ? { token: 'SAFE_INVITE-1', status: 'ok', case_id: C, case_name: 'Case',
