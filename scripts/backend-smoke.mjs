@@ -1,6 +1,6 @@
 /** Real MCP -> HTTP -> PostgreSQL check against tests/backend-fixture.py only. */
 import assert from 'node:assert/strict';
-import { readFile, unlink, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, unlink, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -48,6 +48,20 @@ try {
   await call(owner, 'market_list');
   await call(owner, 'operbots_catalog', { what: 'node_kinds', platform: 'telegram' });
   assertions += 4;
+  await call(owner, 'invites_create', { max_uses: 1, ttl_hours: 24 });
+  const invite = (await get(`/cases/${fixture.case_id}/invites`))[0];
+  assert.ok(invite.token && invite.url);
+  const hiddenInvite = (await get(`/cases/${fixture.case_id}/invites`, fixture.viewer_token))[0];
+  assert.equal(hiddenInvite.token, '');
+  assert.equal(hiddenInvite.url, '');
+  const members = await call(viewer, 'members_list');
+  assert.ok(members.includes('member.invite'));
+  assert.ok(!members.includes(invite.url) && !members.includes(invite.token));
+  await call(viewer, 'members_save', { member: fixture.target_member_id, revoked_permissions: [] }, true);
+  const target = (await get(`/cases/${fixture.case_id}/members`)).find(member => member.id === fixture.target_member_id);
+  assert.deepEqual(target.revoked_permissions, ['flow.publish']);
+  assert.ok(!target.effective_permissions.includes('flow.publish'));
+  assertions += 3;
   await call(owner, 'flows_save', { bot: fixture.bot_id, name: 'QA flow',
     nodes: [{ id: 'start', kind: 'trigger.command', config: { command: 'start' }, x: 10, y: 20 },
       { id: 'reply', kind: 'action.message', config: { text: 'Hi' }, width: 400, data: { color: 'sky' } }],
@@ -57,6 +71,8 @@ try {
   const flowRoot = `/cases/${fixture.case_id}/bots/${fixture.bot_id}/flows`;
   const flowId = (await get(flowRoot)).find(flow => flow.name === 'QA flow').id;
   let flow = await get(`${flowRoot}/${flowId}`);
+  assert.equal(flow.is_active, true);
+  assert.ok(flow.published_at);
   await call(owner, 'flows_save', { bot: fixture.bot_id, flow: flowId,
     nodes: flow.graph.nodes.map(node => ({ id: node.id, kind: node.data.kind, title: 'Changed' })) });
   flow = await get(`${flowRoot}/${flowId}`);
@@ -68,6 +84,39 @@ try {
   await call(owner, 'flows_simulate', { bot: fixture.bot_id, flow: flowId, command: 'start' });
   await call(owner, 'flows_save', { bot: fixture.bot_id, copy_of: flowId, name: 'QA copy', description: null });
   assert.equal((await get(flowRoot)).some(flow => flow.name === 'QA copy'), true);
+  assertions += 4;
+  await call(viewer, 'flows_save', { bot: fixture.bot_id, name: 'QA community draft', scope: 'community' });
+  const draftId = (await get(flowRoot)).find(flow => flow.name === 'QA community draft').id;
+  const draft = await get(`${flowRoot}/${draftId}`);
+  assert.equal(draft.is_active, false);
+  assert.equal(draft.published_at, null);
+  await call(viewer, 'flows_publish', { bot: fixture.bot_id, flow: draftId }, true);
+  await call(viewer, 'flows_publish', { bot: fixture.bot_id, flow: draftId, active: false }, true);
+  assert.equal((await get(`${flowRoot}/${draftId}`)).is_active, false);
+  const published = await call(owner, 'flows_publish', { bot: fixture.bot_id, flow: draftId });
+  assert.ok(published.includes('того же вида'));
+  assert.equal((await get(`${flowRoot}/${draftId}`)).is_active, true);
+  assert.equal((await get(`${flowRoot}/${flowId}`)).is_active, true);
+  assertions += 4;
+  const document = json(await call(owner, 'flows_export', { bot: fixture.bot_id, flow: flowId }));
+  await call(viewer, 'flows_import', { bot: fixture.import_bot_id, document, name: 'QA imported draft' });
+  const imported = (await get(`/cases/${fixture.case_id}/bots/${fixture.import_bot_id}/flows`))[0];
+  assert.equal(imported.is_active, false);
+  assert.equal(imported.published_at, null);
+  assertions += 2;
+  await call(owner, 'market_publish', { bot: fixture.bot_id, flow: flowId,
+    title: 'QA market flow', summary: 'Disposable QA publication' });
+  const itemId = (await get(`/market/items?case_id=${fixture.case_id}`)).items.find(item => item.title === 'QA market flow').id;
+  const marketRoot = `/cases/${fixture.case_id}/bots/${fixture.market_bot_id}/flows`;
+  const installDraft = await call(viewer, 'market_install', { bot: fixture.market_bot_id, item: itemId, name: 'QA market draft' });
+  const marketDraft = (await get(marketRoot))[0];
+  assert.equal(marketDraft.is_active, false);
+  assert.ok(installDraft.includes('В работу не включён'));
+  await call(owner, 'flows_delete', { bot: fixture.market_bot_id, flow: marketDraft.id, confirm_name: marketDraft.name });
+  const installActive = await call(owner, 'market_install', { bot: fixture.market_bot_id, item: itemId, name: 'QA market active' });
+  assert.equal((await get(marketRoot))[0].is_active, true);
+  assert.ok(installActive.includes('Сценарий сразу включён в работу'));
+  assert.ok(!installActive.includes('В работу не включён'));
   assertions += 4;
   await call(owner, 'broadcasts_save', { bot: fixture.bot_id, title: 'QA draft', text: 'Hi',
     audience: { joined_after: '2000-01-01', tags: ['qa'] } });
@@ -148,6 +197,33 @@ try {
   await call(owner, 'extensions_delete', { extension: ext.id, confirm_name: 'CRM' });
   await call(owner, 'counterparties_delete', { counterparty_id: party.id, confirm_name: 'Client' });
   assertions += 4;
+  await call(owner, 'bots_detach', { bot: fixture.bot_id, confirm_name: 'Fixture bot',
+    keep_flows: true, keep_dialogs: true, keep_broadcasts: true, keep_journal: true });
+  assert.ok(!(await get(`/cases/${fixture.case_id}/bots`)).some(bot => bot.id === fixture.bot_id));
+  await call(owner, 'bots_save', { name: 'Restored fixture bot',
+    token: '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi', platform: 'telegram', autostart: false });
+  const restored = (await get(`/cases/${fixture.case_id}/bots`)).filter(bot => bot.external_id === 123456789);
+  assert.equal(restored.length, 1);
+  assert.equal(restored[0].id, fixture.bot_id);
+  assert.equal(restored[0].status, 'stopped');
+  const restoredDetail = await get(`/cases/${fixture.case_id}/bots/${fixture.bot_id}`);
+  assert.deepEqual(restoredDetail.settings, { qa: 'retained' });
+  assert.deepEqual(restoredDetail.stats, { qa: 1 });
+  assert.ok((await get(flowRoot)).some(flow => flow.id === flowId));
+  assert.equal((await get(`/cases/${fixture.case_id}/dialogs/${fixture.dialog_id}`)).bot_id, fixture.bot_id);
+  assertions += 2;
+  await call(owner, 'flows_delete', { bot: fixture.bot_id, flow: flowId, confirm_name: 'QA flow' });
+  assert.ok(!(await get('/market/items')).items.some(item => item.id === itemId));
+  assert.equal((await get(marketRoot))[0].is_active, true);
+  assertions += 1;
+  assert.ok((await get('/auth/sessions')).length > 0);
+  const passwordFile = join(directory, 'password.json');
+  await writeFile(passwordFile, JSON.stringify({ current_password: 'McpQaCurrent42!',
+    new_password: 'McpQaNew42!Secure' }), { mode: 0o600 });
+  await call(owner, 'account_password', { password_file: passwordFile });
+  await call(owner, 'whoami');
+  assert.deepEqual(await get('/auth/sessions'), []);
+  assertions += 2;
   process.stdout.write(`Real backend MCP checks: ${assertions} passed (isolated PostgreSQL, owner/viewer/read-only).\n`);
 } finally {
   await Promise.allSettled(clients.map(client => client.close()));
