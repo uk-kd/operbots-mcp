@@ -1,6 +1,6 @@
 {
   "name": "operbots-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP-сервер всех разделов панели operbots для Codex, Claude Code и других MCP-клиентов",
   "keywords": [
     "mcp",

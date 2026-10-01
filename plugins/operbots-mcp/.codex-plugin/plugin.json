@@ -1,6 +1,6 @@
 {
   "name": "operbots-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Панель operbots в Codex и Claude Code: дела, боты Telegram и MAX, сценарии, диалоги, рассылки, база знаний и ИИ.",
   "author": {
     "name": "Nikita Belan",

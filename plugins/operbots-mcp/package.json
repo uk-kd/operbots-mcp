@@ -1,6 +1,6 @@
 {
   "name": "operbots-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Собранный сервер плагина. Собирается из src — править здесь нечего.",
   "private": true,
   "type": "module"
