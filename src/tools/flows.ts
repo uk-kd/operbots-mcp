@@ -11,6 +11,7 @@
 
 import { z } from 'zod';
 
+import { pickByName } from '../context.js';
 import { FLOW_SCOPES, NODE_KINDS, SIMULATE_EVENTS } from '../enums.js';
 import { ApiError } from '../errors.js';
 import { MASK, raw, report } from '../format.js';
@@ -368,19 +369,15 @@ export async function locate(
   const bot = await ctx.resolveBot(found.id, botHint);
   const root = `/cases/${found.id}/bots/${bot.id}/flows`;
 
-  if (!flowHint) return { found, bot, root, flowId: null };
+  if (flowHint === undefined) return { found, bot, root, flowId: null };
 
   const list = await ctx.api.get<FlowBrief[]>(root);
-  const needle = flowHint.trim().toLowerCase();
-  const match =
-    list.find((item) => item.id === flowHint) ??
-    list.find((item) => item.name.toLowerCase() === needle) ??
-    list.find((item) => item.name.toLowerCase().includes(needle));
-
-  if (!match) {
-    const names = list.map((item) => item.name).join(', ') || 'ни одного';
-    throw new Error(`Сценария «${flowHint}» у бота «${bot.name}» нет. Есть: ${names}`);
+  const hint = flowHint.trim();
+  const byId = list.find((item) => item.id.toLowerCase() === hint.toLowerCase());
+  if (!byId && z.string().uuid().safeParse(hint).success) {
+    throw new ApiError(404, 'not_found', `Сценарий с идентификатором «${hint}» у этого бота не найден.`);
   }
+  const match = byId ?? pickByName(list, hint);
   return { found, bot, root, flowId: match.id };
 }
 
@@ -472,7 +469,8 @@ export const flowTools: Tool[] = [
       'Без параметра flow создаёт сценарий — пустой, из переданного графа или копией другого ' +
       '(copy_of). С параметром flow перезаписывает его. Граф передаётся ЦЕЛИКОМ: чтобы ' +
       'поправить один узел, сначала прочитайте сценарий через flows_get и пришлите изменённый ' +
-      'список полностью. Не переданные nodes/edges/comments/viewport сохраняются. ' +
+      'список полностью вместе с version прочитанной редакции. При конфликте перечитайте и ' +
+      'объедините правки. Не переданные nodes/edges/comments/viewport сохраняются. ' +
       'Новая редакция создаётся, только если граф действительно изменился. ' +
       'Готовые сценарии — «Консультант с ИИ», «Заявка», «Запись на визит» и другие — здесь не ' +
       'создаются: их ставят из маркета через market_install. ' +
@@ -482,9 +480,15 @@ export const flowTools: Tool[] = [
     input: {
       case: caseField,
       bot: botField,
-      flow: z.string().optional().describe('Какой сценарий перезаписать. Не указывайте для нового.'),
+      flow: z.string().trim().min(1).optional()
+        .describe('Какой сценарий перезаписать. Не указывайте для нового.'),
+      version: z.number().int().min(1).optional().describe(
+        'Ожидаемая редакция из flows_get. Обязательна при правке графа существующего сценария.',
+      ),
       copy_of: z
         .string()
+        .trim()
+        .min(1)
         .optional()
         .describe(
           'Скопировать существующий сценарий вместо создания пустого. Название копии — в name; ' +
@@ -525,6 +529,10 @@ export const flowTools: Tool[] = [
       refuseMasked(args.nodes ?? []);
       const graphChanged = [args.nodes, args.edges, args.comments, args.viewport]
         .some(value => value !== undefined);
+      if (args.flow && graphChanged && args.version === undefined) {
+        throw new ApiError(400, 'version_required',
+          'Для правки графа передайте version из flows_get.');
+      }
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
 
       if (args.copy_of && !args.flow) {
@@ -540,7 +548,7 @@ export const flowTools: Tool[] = [
           graph: graphChanged ? build(args, copy.graph) : undefined,
         });
         const renamed = Object.keys(patch).length > 0
-          ? await ctx.api.put<Flow>(`${root}/${copy.id}`, patch) : copy;
+          ? await ctx.api.put<Flow>(`${root}/${copy.id}`, { ...patch, version: copy.version }) : copy;
         return report('Сценарий скопирован.', showFlow(renamed, false));
       }
 
@@ -578,7 +586,9 @@ export const flowTools: Tool[] = [
       });
       if (Object.keys(payload).length === 0) return 'Нечего сохранять: не передано ни одного поля.';
 
-      const saved = await ctx.api.put<Flow>(`${root}/${flowId}`, payload);
+      const saved = await ctx.api.put<Flow>(`${root}/${flowId}`, {
+        ...payload, version: args.version ?? current.version,
+      });
       const grew = saved.version > current.version;
       return report(
         grew

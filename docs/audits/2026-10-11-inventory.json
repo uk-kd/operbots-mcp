@@ -1,0 +1,780 @@
+{
+  "tools": 143,
+  "counts": {
+    "read": 54,
+    "write": 58,
+    "danger": 31
+  },
+  "readOnlyTools": 56,
+  "testFiles": 7,
+  "explicitlyReferencedTools": 93,
+  "withoutExplicitReferences": [
+    "whoami",
+    "sessions_list",
+    "sessions_revoke",
+    "account_update",
+    "users_search",
+    "account_security",
+    "cases_list",
+    "cases_delete",
+    "audit_filters",
+    "cases_leave",
+    "members_remove",
+    "case_transfer",
+    "invites_create",
+    "invites_revoke",
+    "bots_list",
+    "bots_journal",
+    "bots_control",
+    "bots_reveal_token",
+    "bots_webhook_check",
+    "bots_webhook_rotate",
+    "bots_delete",
+    "flows_list",
+    "flows_publish",
+    "flows_versions",
+    "flows_restore",
+    "flows_import",
+    "flows_delete",
+    "market_like",
+    "market_publish",
+    "market_release",
+    "market_update",
+    "market_unpublish",
+    "dialogs_export",
+    "dialogs_delete",
+    "tasks_list",
+    "dialogs_reset_stage",
+    "replies_list",
+    "broadcasts_cancel",
+    "knowledge_save",
+    "knowledge_reindex",
+    "ai_list",
+    "ai_test",
+    "ai_delete",
+    "extensions_get",
+    "extensions_templates",
+    "extensions_nodes",
+    "extensions_oauth_begin",
+    "notifications_summary",
+    "notifications_filters",
+    "notifications_settings"
+  ],
+  "toolInventory": [
+    {
+      "name": "operbots_catalog",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "operbots_login",
+      "kind": "write",
+      "session": true
+    },
+    {
+      "name": "operbots_logout",
+      "kind": "danger",
+      "session": true
+    },
+    {
+      "name": "whoami",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "sessions_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "sessions_revoke",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "account_update",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "account_appearance",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "account_password",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "users_search",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "account_security",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "cases_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "cases_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "cases_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "cases_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "audit_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "audit_filters",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "cases_leave",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "members_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "members_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "members_remove",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "case_transfer",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "roles_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "roles_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "invites_create",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "invites_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "invites_accept",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "invites_revoke",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "bots_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_status",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_webhook_info",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_journal",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "bots_control",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "bots_commands_apply",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "bots_variables_set",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "bots_reveal_token",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "bots_webhook_check",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "bots_webhook_rotate",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "bots_detach",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "bots_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "flows_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "flows_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "flows_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "flows_publish",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "flows_versions",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "flows_restore",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "flows_simulate",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "flows_export",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "flows_import",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "flows_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "market_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "market_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "market_like",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "market_install",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "market_publish",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "market_release",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "market_update",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "market_unpublish",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "dialogs_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "dialogs_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "dialogs_chat_info",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_history",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "dialogs_mark_read",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_export",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "dialogs_reply",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_reply_file",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_download_attachment",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "dialogs_edit_message",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_delete_message",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "dialogs_update",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "tasks_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "tasks_cancel",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "dialogs_release",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_forget_memory",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "dialogs_cancel_scheduled",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "dialogs_reset_stage",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "replies_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "replies_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "replies_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "broadcasts_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "broadcasts_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "broadcasts_targets",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "broadcasts_attach",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "broadcasts_detach",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "broadcasts_preview",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "broadcasts_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "broadcasts_duplicate",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "broadcasts_retry",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "broadcasts_test",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "broadcasts_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "broadcasts_start",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "broadcasts_cancel",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "knowledge_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_add_document",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_document",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "knowledge_document_update",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_reindex",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_search",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "knowledge_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "ai_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "ai_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "ai_usage",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "ai_test",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "ai_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "requests_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "requests_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "requests_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "requests_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "requests_types_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "requests_types_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "requests_types_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "requests_tasks_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "requests_task_complete",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "requests_comment",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "requests_workflow",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "requests_cancel",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "counterparties_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "counterparties_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "counterparties_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "counterparties_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "counterparties_settings",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "counterparties_settings_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "counterparties_dialogs",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "counterparties_link",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "counterparties_unlink",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "counterparties_reconcile",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "extensions_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "extensions_get",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "extensions_templates",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "extensions_nodes",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "extensions_save",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "extensions_oauth_begin",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "extensions_delete",
+      "kind": "danger",
+      "session": false
+    },
+    {
+      "name": "notifications_list",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "notifications_summary",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "notifications_filters",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "notifications_read",
+      "kind": "write",
+      "session": false
+    },
+    {
+      "name": "notifications_settings",
+      "kind": "read",
+      "session": false
+    },
+    {
+      "name": "notifications_settings_save",
+      "kind": "write",
+      "session": false
+    }
+  ]
+}

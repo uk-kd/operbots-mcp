@@ -168,6 +168,25 @@ export async function parseBytes(response: Response): Promise<Uint8Array> {
   return data;
 }
 
+/** Streams a successful body under the same fetch timeout and API error contract. */
+export async function* streamBytes(response: Response): AsyncGenerator<Uint8Array> {
+  if (!response.ok) await parseBytes(response);
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const result = await reader.read().catch(error => {
+        throw new ConnectionError(describeNetworkFailure(response.url, error), error);
+      });
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 /** Ошибка панели из тела ответа — с телом любого вида. */
 function failure(response: Response, text: string): ApiError {
   let code = `http_${response.status}`;

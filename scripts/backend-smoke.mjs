@@ -73,7 +73,7 @@ try {
   let flow = await get(`${flowRoot}/${flowId}`);
   assert.equal(flow.is_active, true);
   assert.ok(flow.published_at);
-  await call(owner, 'flows_save', { bot: fixture.bot_id, flow: flowId,
+  await call(owner, 'flows_save', { bot: fixture.bot_id, flow: flowId, version: flow.version,
     nodes: flow.graph.nodes.map(node => ({ id: node.id, kind: node.data.kind, title: 'Changed' })) });
   flow = await get(`${flowRoot}/${flowId}`);
   assert.equal(flow.graph.comments[0].text, 'Keep this note');
