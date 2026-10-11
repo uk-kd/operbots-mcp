@@ -7,13 +7,13 @@
  * роли вошедшего человека.
  */
 
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { open, readFile, stat, unlink, type FileHandle } from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
 
 import { API_PREFIX, USER_AGENT, type Config } from './config.js';
 import type { AuthManager } from './auth.js';
 import { ApiError, ConfigError } from './errors.js';
-import { parse, parseBytes, parseText, send } from './http.js';
+import { parse, parseBytes, parseText, send, streamBytes } from './http.js';
 
 export type Query = Record<string, string | number | boolean | string[] | undefined | null>;
 
@@ -91,15 +91,32 @@ export class OperbotsApi {
   ): Promise<{ path: string; bytes: number; content_type: string }> {
     requireLocalPath(destination);
     const response = await this.request('GET', path, { query });
-    let data: Uint8Array;
+    let file: FileHandle | undefined;
+    let complete = false;
+    let bytes = 0;
     try {
-      data = await parseBytes(response);
+      if (!response.ok) await parseBytes(response);
+      file = await open(destination, 'wx', 0o600);
+      for await (const chunk of streamBytes(response)) {
+        bytes += chunk.length;
+        if (bytes > 100 * 1024 * 1024) {
+          throw new ConfigError('Файл больше 100 МиБ — предел скачивания MCP.');
+        }
+        await file.writeFile(chunk);
+      }
+      await file.close();
+      complete = true;
+      return { path: destination, bytes,
+        content_type: response.headers.get('content-type') ?? 'application/octet-stream' };
     } catch (error) {
       throw enrich(error);
+    } finally {
+      await response.body?.cancel().catch(() => undefined);
+      if (file && !complete) {
+        await file.close();
+        await unlink(destination);
+      }
     }
-    await writeFile(destination, data, { flag: 'wx', mode: 0o600 });
-    return { path: destination, bytes: data.length,
-      content_type: response.headers.get('content-type') ?? 'application/octet-stream' };
   }
 
   /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */

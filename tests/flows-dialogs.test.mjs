@@ -111,7 +111,8 @@ function mutation(ctx, method) { return ctx.calls.find(call => call[0] === metho
 
 test('flow save preserves comments, styles, labels, handles, sizes and viewport', async () => {
   const ctx = context();
-  await invoke('flows_save', { ...flowArgs, nodes: [{ id: 'start', kind: 'trigger.text' }] }, ctx);
+  await invoke('flows_save', { ...flowArgs, version: flow.version,
+    nodes: [{ id: 'start', kind: 'trigger.text' }] }, ctx);
   const saved = mutation(ctx, 'put')[2].graph;
   assert.deepEqual(saved.comments, graph.comments);
   assert.deepEqual(saved.edges, graph.edges);
@@ -121,7 +122,8 @@ test('flow save preserves comments, styles, labels, handles, sizes and viewport'
 
 test('flow comments and viewport can be edited without replacing nodes or edges', async () => {
   const ctx = context();
-  await invoke('flows_save', { ...flowArgs, comments: [{ id: 'note', text: 'Updated', x: 0 }],
+  await invoke('flows_save', { ...flowArgs, version: flow.version,
+    comments: [{ id: 'note', text: 'Updated', x: 0 }],
     viewport: { x: 0, y: 0, zoom: 1 } }, ctx);
   const saved = mutation(ctx, 'put')[2].graph;
   assert.deepEqual(saved.comments, [{ id: 'note', text: 'Updated', color: 'sky',
@@ -133,7 +135,7 @@ test('flow comments and viewport can be edited without replacing nodes or edges'
 
 test('flow style replacement is explicit and null clears handles and sizes', async () => {
   const ctx = context();
-  await invoke('flows_save', { ...flowArgs,
+  await invoke('flows_save', { ...flowArgs, version: flow.version,
     nodes: [{ id: 'start', kind: 'trigger.text', data: { color: 'amber' }, width: null }],
     edges: [{ id: 'link', from: 'start', to: 'start', in: null, out: null,
       label: '', data: { color: 'emerald' } }], comments: [] }, ctx);

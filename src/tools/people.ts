@@ -470,7 +470,7 @@ export const peopleTools: Tool[] = [
     description: 'Гасит ссылку-приглашение: перейти по ней больше не получится.',
     input: {
       case: caseField,
-      invite_id: z.string().describe('Идентификатор приглашения из members_list.'),
+      invite_id: z.string().uuid().describe('Идентификатор приглашения из members_list.'),
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);

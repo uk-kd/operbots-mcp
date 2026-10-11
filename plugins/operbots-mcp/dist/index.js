@@ -7313,6 +7313,23 @@ async function parseBytes(response) {
   if (!response.ok) throw failure(response, new TextDecoder().decode(data2));
   return data2;
 }
+async function* streamBytes(response) {
+  if (!response.ok) await parseBytes(response);
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const result = await reader.read().catch((error51) => {
+        throw new ConnectionError(describeNetworkFailure(response.url, error51), error51);
+      });
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    await reader.cancel().catch(() => void 0);
+    reader.releaseLock();
+  }
+}
 function failure(response, text) {
   let code = `http_${response.status}`;
   let message = `\u041F\u0430\u043D\u0435\u043B\u044C \u043E\u0442\u0432\u0435\u0442\u0438\u043B\u0430 \u043E\u0448\u0438\u0431\u043A\u043E\u0439 ${response.status}`;
@@ -7435,7 +7452,7 @@ function validateToken(raw2) {
 }
 
 // src/api.ts
-import { readFile as readFile2, stat as stat2, writeFile as writeFile2 } from "node:fs/promises";
+import { open as open2, readFile as readFile2, stat as stat2, unlink as unlink2 } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 init_errors();
 var OperbotsApi = class {
@@ -7497,18 +7514,35 @@ var OperbotsApi = class {
   async download(path, destination, query) {
     requireLocalPath(destination);
     const response = await this.request("GET", path, { query });
-    let data2;
+    let file2;
+    let complete = false;
+    let bytes = 0;
     try {
-      data2 = await parseBytes(response);
+      if (!response.ok) await parseBytes(response);
+      file2 = await open2(destination, "wx", 384);
+      for await (const chunk of streamBytes(response)) {
+        bytes += chunk.length;
+        if (bytes > 100 * 1024 * 1024) {
+          throw new ConfigError("\u0424\u0430\u0439\u043B \u0431\u043E\u043B\u044C\u0448\u0435 100 \u041C\u0438\u0411 \u2014 \u043F\u0440\u0435\u0434\u0435\u043B \u0441\u043A\u0430\u0447\u0438\u0432\u0430\u043D\u0438\u044F MCP.");
+        }
+        await file2.writeFile(chunk);
+      }
+      await file2.close();
+      complete = true;
+      return {
+        path: destination,
+        bytes,
+        content_type: response.headers.get("content-type") ?? "application/octet-stream"
+      };
     } catch (error51) {
       throw enrich(error51);
+    } finally {
+      await response.body?.cancel().catch(() => void 0);
+      if (file2 && !complete) {
+        await file2.close();
+        await unlink2(destination);
+      }
     }
-    await writeFile2(destination, data2, { flag: "wx", mode: 384 });
-    return {
-      path: destination,
-      bytes: data2.length,
-      content_type: response.headers.get("content-type") ?? "application/octet-stream"
-    };
   }
   /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */
   async text(path, query) {
@@ -31927,7 +31961,7 @@ function pickByName(list, wanted) {
 init_errors();
 
 // src/tools/account.ts
-import { open as open2 } from "node:fs/promises";
+import { open as open3 } from "node:fs/promises";
 init_credentials();
 init_errors();
 
@@ -32029,7 +32063,7 @@ async function optional2(request) {
 // src/tools/account.ts
 async function readSecretFile(path) {
   requireLocalPath(path);
-  const file2 = await open2(path, "r");
+  const file2 = await open3(path, "r");
   try {
     const info = await file2.stat();
     if (!info.isFile() || info.size > 16 * 1024) throw new ApiError(400, "invalid_secret_file", "\u041D\u0443\u0436\u0435\u043D \u043E\u0431\u044B\u0447\u043D\u044B\u0439 \u0444\u0430\u0439\u043B \u0440\u0430\u0437\u043C\u0435\u0440\u043E\u043C \u0434\u043E 16 \u041A\u0411.");
@@ -33621,7 +33655,7 @@ var peopleTools = [
     description: "\u0413\u0430\u0441\u0438\u0442 \u0441\u0441\u044B\u043B\u043A\u0443-\u043F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435: \u043F\u0435\u0440\u0435\u0439\u0442\u0438 \u043F\u043E \u043D\u0435\u0439 \u0431\u043E\u043B\u044C\u0448\u0435 \u043D\u0435 \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u0441\u044F.",
     input: {
       case: caseField,
-      invite_id: external_exports.string().describe("\u0418\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u043F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u044F \u0438\u0437 members_list.")
+      invite_id: external_exports.string().uuid().describe("\u0418\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u043F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u044F \u0438\u0437 members_list.")
     },
     async run(args, ctx) {
       const found = await ctx.resolveCase(args.case);
@@ -35043,14 +35077,9 @@ async function locate(ctx, caseHint, botHint, flowHint) {
   const found = await ctx.resolveCase(caseHint);
   const bot = await ctx.resolveBot(found.id, botHint);
   const root = `/cases/${found.id}/bots/${bot.id}/flows`;
-  if (!flowHint) return { found, bot, root, flowId: null };
+  if (flowHint === void 0) return { found, bot, root, flowId: null };
   const list = await ctx.api.get(root);
-  const needle = flowHint.trim().toLowerCase();
-  const match = list.find((item) => item.id === flowHint) ?? list.find((item) => item.name.toLowerCase() === needle) ?? list.find((item) => item.name.toLowerCase().includes(needle));
-  if (!match) {
-    const names = list.map((item) => item.name).join(", ") || "\u043D\u0438 \u043E\u0434\u043D\u043E\u0433\u043E";
-    throw new Error(`\u0421\u0446\u0435\u043D\u0430\u0440\u0438\u044F \xAB${flowHint}\xBB \u0443 \u0431\u043E\u0442\u0430 \xAB${bot.name}\xBB \u043D\u0435\u0442. \u0415\u0441\u0442\u044C: ${names}`);
-  }
+  const match = list.find((item) => item.id.toLowerCase() === flowHint.trim().toLowerCase()) ?? pickByName(list, flowHint);
   return { found, bot, root, flowId: match.id };
 }
 var flowTools = [
@@ -35126,11 +35155,14 @@ var flowTools = [
     name: "flows_save",
     title: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u0438\u043B\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439",
     kind: "write",
-    description: "\u0411\u0435\u0437 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u0430 flow \u0441\u043E\u0437\u0434\u0430\u0451\u0442 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u2014 \u043F\u0443\u0441\u0442\u043E\u0439, \u0438\u0437 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043D\u043E\u0433\u043E \u0433\u0440\u0430\u0444\u0430 \u0438\u043B\u0438 \u043A\u043E\u043F\u0438\u0435\u0439 \u0434\u0440\u0443\u0433\u043E\u0433\u043E (copy_of). \u0421 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u043E\u043C flow \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u044B\u0432\u0430\u0435\u0442 \u0435\u0433\u043E. \u0413\u0440\u0430\u0444 \u043F\u0435\u0440\u0435\u0434\u0430\u0451\u0442\u0441\u044F \u0426\u0415\u041B\u0418\u041A\u041E\u041C: \u0447\u0442\u043E\u0431\u044B \u043F\u043E\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u043E\u0434\u0438\u043D \u0443\u0437\u0435\u043B, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0447\u0435\u0440\u0435\u0437 flows_get \u0438 \u043F\u0440\u0438\u0448\u043B\u0438\u0442\u0435 \u0438\u0437\u043C\u0435\u043D\u0451\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E. \u041D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043D\u044B\u0435 nodes/edges/comments/viewport \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F. \u041D\u043E\u0432\u0430\u044F \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u0441\u043E\u0437\u0434\u0430\u0451\u0442\u0441\u044F, \u0442\u043E\u043B\u044C\u043A\u043E \u0435\u0441\u043B\u0438 \u0433\u0440\u0430\u0444 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u0438\u0437\u043C\u0435\u043D\u0438\u043B\u0441\u044F. \u0413\u043E\u0442\u043E\u0432\u044B\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0438 \u2014 \xAB\u041A\u043E\u043D\u0441\u0443\u043B\u044C\u0442\u0430\u043D\u0442 \u0441 \u0418\u0418\xBB, \xAB\u0417\u0430\u044F\u0432\u043A\u0430\xBB, \xAB\u0417\u0430\u043F\u0438\u0441\u044C \u043D\u0430 \u0432\u0438\u0437\u0438\u0442\xBB \u0438 \u0434\u0440\u0443\u0433\u0438\u0435 \u2014 \u0437\u0434\u0435\u0441\u044C \u043D\u0435 \u0441\u043E\u0437\u0434\u0430\u044E\u0442\u0441\u044F: \u0438\u0445 \u0441\u0442\u0430\u0432\u044F\u0442 \u0438\u0437 \u043C\u0430\u0440\u043A\u0435\u0442\u0430 \u0447\u0435\u0440\u0435\u0437 market_install. \u041F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0431\u0435\u0437 copy_of \u043F\u0435\u0440\u0432\u044B\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0441\u0432\u043E\u0435\u0433\u043E \u0432\u0438\u0434\u0430 \u0432\u043A\u043B\u044E\u0447\u0430\u0435\u0442\u0441\u044F \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438 \u0442\u043E\u043B\u044C\u043A\u043E \u0441 \u043F\u0440\u0430\u0432\u043E\u043C flow.publish; \u0431\u0435\u0437 \u043D\u0435\u0433\u043E \u043E\u0441\u0442\u0430\u0451\u0442\u0441\u044F \u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u043E\u043C. \u041A\u043E\u043F\u0438\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u0430\u043C\u0438. \u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u2014 flows_publish.",
+    description: "\u0411\u0435\u0437 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u0430 flow \u0441\u043E\u0437\u0434\u0430\u0451\u0442 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u2014 \u043F\u0443\u0441\u0442\u043E\u0439, \u0438\u0437 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043D\u043E\u0433\u043E \u0433\u0440\u0430\u0444\u0430 \u0438\u043B\u0438 \u043A\u043E\u043F\u0438\u0435\u0439 \u0434\u0440\u0443\u0433\u043E\u0433\u043E (copy_of). \u0421 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u043E\u043C flow \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u044B\u0432\u0430\u0435\u0442 \u0435\u0433\u043E. \u0413\u0440\u0430\u0444 \u043F\u0435\u0440\u0435\u0434\u0430\u0451\u0442\u0441\u044F \u0426\u0415\u041B\u0418\u041A\u041E\u041C: \u0447\u0442\u043E\u0431\u044B \u043F\u043E\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u043E\u0434\u0438\u043D \u0443\u0437\u0435\u043B, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0447\u0435\u0440\u0435\u0437 flows_get \u0438 \u043F\u0440\u0438\u0448\u043B\u0438\u0442\u0435 \u0438\u0437\u043C\u0435\u043D\u0451\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u0432\u043C\u0435\u0441\u0442\u0435 \u0441 version \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u043D\u043E\u0439 \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u0438. \u041F\u0440\u0438 \u043A\u043E\u043D\u0444\u043B\u0438\u043A\u0442\u0435 \u043F\u0435\u0440\u0435\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0438 \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0438\u0442\u0435 \u043F\u0440\u0430\u0432\u043A\u0438. \u041D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043D\u044B\u0435 nodes/edges/comments/viewport \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F. \u041D\u043E\u0432\u0430\u044F \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u0441\u043E\u0437\u0434\u0430\u0451\u0442\u0441\u044F, \u0442\u043E\u043B\u044C\u043A\u043E \u0435\u0441\u043B\u0438 \u0433\u0440\u0430\u0444 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u0438\u0437\u043C\u0435\u043D\u0438\u043B\u0441\u044F. \u0413\u043E\u0442\u043E\u0432\u044B\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0438 \u2014 \xAB\u041A\u043E\u043D\u0441\u0443\u043B\u044C\u0442\u0430\u043D\u0442 \u0441 \u0418\u0418\xBB, \xAB\u0417\u0430\u044F\u0432\u043A\u0430\xBB, \xAB\u0417\u0430\u043F\u0438\u0441\u044C \u043D\u0430 \u0432\u0438\u0437\u0438\u0442\xBB \u0438 \u0434\u0440\u0443\u0433\u0438\u0435 \u2014 \u0437\u0434\u0435\u0441\u044C \u043D\u0435 \u0441\u043E\u0437\u0434\u0430\u044E\u0442\u0441\u044F: \u0438\u0445 \u0441\u0442\u0430\u0432\u044F\u0442 \u0438\u0437 \u043C\u0430\u0440\u043A\u0435\u0442\u0430 \u0447\u0435\u0440\u0435\u0437 market_install. \u041F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0431\u0435\u0437 copy_of \u043F\u0435\u0440\u0432\u044B\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0441\u0432\u043E\u0435\u0433\u043E \u0432\u0438\u0434\u0430 \u0432\u043A\u043B\u044E\u0447\u0430\u0435\u0442\u0441\u044F \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438 \u0442\u043E\u043B\u044C\u043A\u043E \u0441 \u043F\u0440\u0430\u0432\u043E\u043C flow.publish; \u0431\u0435\u0437 \u043D\u0435\u0433\u043E \u043E\u0441\u0442\u0430\u0451\u0442\u0441\u044F \u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u043E\u043C. \u041A\u043E\u043F\u0438\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u0430\u043C\u0438. \u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u2014 flows_publish.",
     input: {
       case: caseField,
       bot: botField,
       flow: external_exports.string().optional().describe("\u041A\u0430\u043A\u043E\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C. \u041D\u0435 \u0443\u043A\u0430\u0437\u044B\u0432\u0430\u0439\u0442\u0435 \u0434\u043B\u044F \u043D\u043E\u0432\u043E\u0433\u043E."),
+      version: external_exports.number().int().min(1).optional().describe(
+        "\u041E\u0436\u0438\u0434\u0430\u0435\u043C\u0430\u044F \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u0438\u0437 flows_get. \u041E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u0430 \u043F\u0440\u0438 \u043F\u0440\u0430\u0432\u043A\u0435 \u0433\u0440\u0430\u0444\u0430 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0435\u0433\u043E \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u044F."
+      ),
       copy_of: external_exports.string().optional().describe(
         "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0432\u043C\u0435\u0441\u0442\u043E \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044F \u043F\u0443\u0441\u0442\u043E\u0433\u043E. \u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043F\u0438\u0438 \u2014 \u0432 name; \u0431\u0435\u0437 \u043D\u0435\u0433\u043E \u0431\u0443\u0434\u0435\u0442 \xAB\u2026 \u2014 \u043A\u043E\u043F\u0438\u044F\xBB."
       ),
@@ -35161,6 +35193,13 @@ var flowTools = [
       }
       refuseMasked(args.nodes ?? []);
       const graphChanged = [args.nodes, args.edges, args.comments, args.viewport].some((value) => value !== void 0);
+      if (args.flow && graphChanged && args.version === void 0) {
+        throw new ApiError(
+          400,
+          "version_required",
+          "\u0414\u043B\u044F \u043F\u0440\u0430\u0432\u043A\u0438 \u0433\u0440\u0430\u0444\u0430 \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 version \u0438\u0437 flows_get."
+        );
+      }
       const { root, flowId } = await locate(ctx, args.case, args.bot, args.flow);
       if (args.copy_of && !args.flow) {
         const source = await locate(ctx, args.case, args.bot, args.copy_of);
@@ -35174,7 +35213,7 @@ var flowTools = [
           comment: args.comment,
           graph: graphChanged ? build(args, copy.graph) : void 0
         });
-        const renamed = Object.keys(patch).length > 0 ? await ctx.api.put(`${root}/${copy.id}`, patch) : copy;
+        const renamed = Object.keys(patch).length > 0 ? await ctx.api.put(`${root}/${copy.id}`, { ...patch, version: copy.version }) : copy;
         return report("\u0421\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D.", showFlow(renamed, false));
       }
       if (!flowId) {
@@ -35207,7 +35246,10 @@ var flowTools = [
         comment: args.comment
       });
       if (Object.keys(payload).length === 0) return "\u041D\u0435\u0447\u0435\u0433\u043E \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u0442\u044C: \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0438 \u043E\u0434\u043D\u043E\u0433\u043E \u043F\u043E\u043B\u044F.";
-      const saved = await ctx.api.put(`${root}/${flowId}`, payload);
+      const saved = await ctx.api.put(`${root}/${flowId}`, {
+        ...payload,
+        version: args.version ?? current.version
+      });
       const grew = saved.version > current.version;
       return report(
         grew ? `\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E, \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u2116${saved.version}.` : "\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E; \u0433\u0440\u0430\u0444 \u043D\u0435 \u0438\u0437\u043C\u0435\u043D\u0438\u043B\u0441\u044F, \u043D\u043E\u0432\u0430\u044F \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u043D\u0435 \u0441\u043E\u0437\u0434\u0430\u0432\u0430\u043B\u0430\u0441\u044C.",
