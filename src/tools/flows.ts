@@ -372,8 +372,12 @@ export async function locate(
   if (flowHint === undefined) return { found, bot, root, flowId: null };
 
   const list = await ctx.api.get<FlowBrief[]>(root);
-  const match = list.find((item) => item.id.toLowerCase() === flowHint.trim().toLowerCase())
-    ?? pickByName(list, flowHint);
+  const hint = flowHint.trim();
+  const byId = list.find((item) => item.id.toLowerCase() === hint.toLowerCase());
+  if (!byId && z.string().uuid().safeParse(hint).success) {
+    throw new ApiError(404, 'not_found', `Сценарий с идентификатором «${hint}» у этого бота не найден.`);
+  }
+  const match = byId ?? pickByName(list, hint);
   return { found, bot, root, flowId: match.id };
 }
 
@@ -476,12 +480,15 @@ export const flowTools: Tool[] = [
     input: {
       case: caseField,
       bot: botField,
-      flow: z.string().optional().describe('Какой сценарий перезаписать. Не указывайте для нового.'),
+      flow: z.string().trim().min(1).optional()
+        .describe('Какой сценарий перезаписать. Не указывайте для нового.'),
       version: z.number().int().min(1).optional().describe(
         'Ожидаемая редакция из flows_get. Обязательна при правке графа существующего сценария.',
       ),
       copy_of: z
         .string()
+        .trim()
+        .min(1)
         .optional()
         .describe(
           'Скопировать существующий сценарий вместо создания пустого. Название копии — в name; ' +

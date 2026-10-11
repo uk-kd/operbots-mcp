@@ -35079,7 +35079,12 @@ async function locate(ctx, caseHint, botHint, flowHint) {
   const root = `/cases/${found.id}/bots/${bot.id}/flows`;
   if (flowHint === void 0) return { found, bot, root, flowId: null };
   const list = await ctx.api.get(root);
-  const match = list.find((item) => item.id.toLowerCase() === flowHint.trim().toLowerCase()) ?? pickByName(list, flowHint);
+  const hint = flowHint.trim();
+  const byId = list.find((item) => item.id.toLowerCase() === hint.toLowerCase());
+  if (!byId && external_exports.string().uuid().safeParse(hint).success) {
+    throw new ApiError(404, "not_found", `\u0421\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0441 \u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440\u043E\u043C \xAB${hint}\xBB \u0443 \u044D\u0442\u043E\u0433\u043E \u0431\u043E\u0442\u0430 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D.`);
+  }
+  const match = byId ?? pickByName(list, hint);
   return { found, bot, root, flowId: match.id };
 }
 var flowTools = [
@@ -35159,11 +35164,11 @@ var flowTools = [
     input: {
       case: caseField,
       bot: botField,
-      flow: external_exports.string().optional().describe("\u041A\u0430\u043A\u043E\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C. \u041D\u0435 \u0443\u043A\u0430\u0437\u044B\u0432\u0430\u0439\u0442\u0435 \u0434\u043B\u044F \u043D\u043E\u0432\u043E\u0433\u043E."),
+      flow: external_exports.string().trim().min(1).optional().describe("\u041A\u0430\u043A\u043E\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C. \u041D\u0435 \u0443\u043A\u0430\u0437\u044B\u0432\u0430\u0439\u0442\u0435 \u0434\u043B\u044F \u043D\u043E\u0432\u043E\u0433\u043E."),
       version: external_exports.number().int().min(1).optional().describe(
         "\u041E\u0436\u0438\u0434\u0430\u0435\u043C\u0430\u044F \u0440\u0435\u0434\u0430\u043A\u0446\u0438\u044F \u0438\u0437 flows_get. \u041E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u0430 \u043F\u0440\u0438 \u043F\u0440\u0430\u0432\u043A\u0435 \u0433\u0440\u0430\u0444\u0430 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0435\u0433\u043E \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u044F."
       ),
-      copy_of: external_exports.string().optional().describe(
+      copy_of: external_exports.string().trim().min(1).optional().describe(
         "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0439 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u0432\u043C\u0435\u0441\u0442\u043E \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044F \u043F\u0443\u0441\u0442\u043E\u0433\u043E. \u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043F\u0438\u0438 \u2014 \u0432 name; \u0431\u0435\u0437 \u043D\u0435\u0433\u043E \u0431\u0443\u0434\u0435\u0442 \xAB\u2026 \u2014 \u043A\u043E\u043F\u0438\u044F\xBB."
       ),
       name: external_exports.string().min(1).max(120).optional().describe("\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u044F."),

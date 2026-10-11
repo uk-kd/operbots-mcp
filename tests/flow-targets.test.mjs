@@ -77,3 +77,17 @@ test('metadata-only writes and copied flow patches include the read revision', a
   await invoke('flows_save', { bot: 'Bot', copy_of: id, description: null }, copy);
   assert.equal(copy.calls.find(call => call[0] === 'put')[2].version, 4);
 });
+
+test('blank copy_of cannot create a new flow instead of a copy', async () => {
+  const ctx = context();
+  await assert.rejects(invoke('flows_save', { bot: 'Bot', copy_of: '', name: 'Copy' }, ctx),
+    error => error instanceof z.ZodError);
+  assert.equal(ctx.calls.length, 0);
+});
+
+test('missing UUID cannot fall back to a different flow with that name', async () => {
+  const ctx = context([{ ...flow, name: other }]);
+  await assert.rejects(invoke('flows_save', { bot: 'Bot', flow: other, description: null }, ctx),
+    error => error.code === 'not_found');
+  assert.ok(ctx.calls.every(call => call[0] === 'get'));
+});
