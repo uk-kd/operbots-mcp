@@ -5,6 +5,7 @@
 import { z } from 'zod';
 
 import type { Page } from '../api.js';
+import { ApiError } from '../errors.js';
 import { pageFooter, report } from '../format.js';
 import { caseField, body, limitField, optional, tool, type Tool } from './kit.js';
 
@@ -149,6 +150,8 @@ export const caseTools: Tool[] = [
       name: z.string().min(2).max(120).optional().describe('Название дела.'),
       description: z.string().max(2000).nullable().optional().describe('Описание; null — очистить.'),
       settings: z.record(z.string(), z.unknown()).optional().describe('Настройки дела: карта целиком.'),
+      template_key: z.string().min(1).max(80).optional().describe('Только создание: ключ из operbots_catalog what=case_templates.'),
+      include_examples: z.boolean().optional().describe('Только создание: добавить примеры шаблона. По умолчанию true.'),
       emoji: z.string().max(16).optional().describe('Знак дела, например 🛍. По умолчанию ◆.'),
       accent: z
         .string()
@@ -174,7 +177,8 @@ export const caseTools: Tool[] = [
         if (!args.name) return 'Чтобы создать дело, нужно название.';
         // Архив задаётся только правкой: при создании панель такого поля не ждёт.
         const { is_archived, settings, ...fresh } = payload;
-        const created = await ctx.api.post<Record<string, unknown>>('/cases', fresh);
+        const created = await ctx.api.post<Record<string, unknown>>('/cases', body({ ...fresh,
+          template_key: args.template_key, include_examples: args.include_examples }));
         const followup = body({ is_archived, settings });
         if (Object.keys(followup).length) await ctx.api.patch(`/cases/${created.id as string}`, followup);
         ctx.forgetCases();
@@ -185,6 +189,9 @@ export const caseTools: Tool[] = [
         });
       }
 
+      if (args.template_key !== undefined || args.include_examples !== undefined) {
+        throw new ApiError(400, 'creation_only', 'template_key и include_examples доступны только при создании дела.');
+      }
       const found = await ctx.resolveCase(args.case);
       if (Object.keys(payload).length === 0) return 'Нечего менять: не передано ни одного поля.';
 

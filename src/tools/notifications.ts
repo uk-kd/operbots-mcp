@@ -34,8 +34,11 @@ export const notificationTools: Tool[] = [
       return report('Настройки уведомлений.', await ctx.api.get('/notifications/settings'));
     } }),
   tool({ name: 'notifications_settings_save', title: 'Настроить уведомления', kind: 'write',
-    description: 'Меняет флаги указанных видов; остальные настройки сохраняются. replace=true заменяет всю карту и сбрасывает пропущенные виды к серверным значениям.',
+    description: 'Меняет флаги указанных видов; остальные настройки сохраняются. Обязательные moderation.* отключить нельзя. replace=true заменяет всю карту и сбрасывает пропущенные виды к серверным значениям.',
     input: { kinds: z.record(z.string(), z.boolean()), replace: z.boolean().optional() }, async run(args, ctx) {
+      if (Object.entries(args.kinds).some(([kind, enabled]) => kind.startsWith('moderation.') && !enabled)) {
+        throw new ApiError(400, 'required_notification', 'Уведомления moderation.* обязательны и не отключаются.');
+      }
       const previous = args.replace ? [] : (await ctx.api.get<{ kinds: { kind: string; enabled: boolean }[] }>('/notifications/settings')).kinds;
       const kinds = { ...Object.fromEntries(previous.map(item => [item.kind, item.enabled])), ...args.kinds };
       return report('Настройки сохранены.', await ctx.api.put('/notifications/settings', { kinds }));

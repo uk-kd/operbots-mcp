@@ -52,17 +52,17 @@ for (const [clientName, config, variable] of [
         await client.connect(transport);
         assert.equal(client.getServerVersion().version, version);
         const { tools } = await client.listTools();
-        assert.equal(tools.length, readOnly ? 56 : 143, errors);
+        assert.equal(tools.length, readOnly ? 61 : 159, errors);
         assert.ok(tools.some(tool => tool.name === 'whoami'));
         assert.ok(tools.some(tool => tool.name === 'operbots_login'));
         for (const name of ['requests_get', 'counterparties_get', 'extensions_get', 'notifications_list',
-          'ai_usage', 'bots_status', 'invites_get', 'dialogs_download_attachment']) {
+          'ai_usage', 'ai_files_list', 'ai_files_download', 'ai_jobs_list', 'bots_status', 'invites_get', 'dialogs_download_attachment']) {
           assert.ok(tools.some(tool => tool.name === name), `missing ${name}`);
         }
         if (readOnly) {
           assert.ok(tools.every(tool => tool.annotations?.readOnlyHint ||
             ['operbots_login', 'operbots_logout'].includes(tool.name)));
-          for (const name of ['broadcasts_start', 'requests_save', 'dialogs_mark_read', 'knowledge_search']) {
+          for (const name of ['broadcasts_start', 'requests_save', 'dialogs_mark_read', 'knowledge_search', 'ai_models', 'ai_stream', 'ai_jobs_create', 'ai_jobs_candidates']) {
             assert.ok(!tools.some(tool => tool.name === name), `write tool exposed: ${name}`);
           }
         }

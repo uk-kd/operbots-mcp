@@ -112,7 +112,7 @@ JSON-файл `password_file` с полями `current_password` и `new_passwor
 | `OPERBOTS_URL` | Адрес панели. Обычно берётся из сохранённого профиля |
 | `OPERBOTS_TOKEN` | Токен вместо сохранённого файла: контейнер, сборка |
 | `OPERBOTS_CASE` | Дело по умолчанию: короткое имя, название или идентификатор |
-| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 56 вместо 143; вход и выход остаются |
+| `OPERBOTS_READ_ONLY=1` | Оставить инструменты чтения — 61 вместо 159; вход и выход остаются |
 | `OPERBOTS_CREDENTIALS` | Другой путь к файлу доступа |
 | `OPERBOTS_TIMEOUT_MS` | Сколько ждать ответ панели. По умолчанию 30000 |
 | `OPERBOTS_INSECURE_TLS=1` | Не проверять сертификат — для самоподписанного TLS |
@@ -121,7 +121,7 @@ JSON-файл `password_file` с полями `current_password` и `new_passwor
 
 ## Инструменты
 
-143 инструмента. Дела, ботов, сценарии, публикации маркета, материалы, заготовки, рассылки и
+159 инструментов. Дела, ботов, сценарии, публикации маркета, материалы, заготовки, рассылки и
 подключения можно называть по имени — идентификаторы не нужны:
 `flows_publish bot="бот поддержки" flow="Приём заявок"`.
 
@@ -144,16 +144,18 @@ JSON-файл `password_file` с полями `current_password` и `new_passwor
 | **Заготовки ответов** | `replies_list`, `replies_save`, `replies_delete` |
 | **Рассылки** | `broadcasts_list`, `broadcasts_get`, `broadcasts_targets`, `broadcasts_attach`, `broadcasts_detach`, `broadcasts_preview`, `broadcasts_save`, `broadcasts_duplicate`, `broadcasts_retry`, `broadcasts_test`, `broadcasts_delete`, `broadcasts_start`, `broadcasts_cancel` |
 | **База знаний** | `knowledge_list`, `knowledge_save`, `knowledge_add_document`, `knowledge_document`, `knowledge_document_update`, `knowledge_reindex`, `knowledge_search`, `knowledge_delete` |
-| **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_usage`, `ai_test`, `ai_delete` |
+| **ИИ-сервисы** | `ai_list`, `ai_save`, `ai_usage`, `ai_test`, `ai_delete`, `ai_models`, `ai_stream`, `ai_speech`, `ai_transcribe` |
+| **Файлы ИИ** | `ai_files_list`, `ai_files_get`, `ai_files_upload`, `ai_files_refresh`, `ai_files_download`, `ai_files_delete` |
+| **Задачи ИИ** | `ai_jobs_list`, `ai_jobs_get`, `ai_jobs_create`, `ai_jobs_cancel`, `ai_jobs_candidates`, `ai_jobs_reconcile` |
 | **Расширения** | `extensions_list`, `extensions_get`, `extensions_templates`, `extensions_nodes`, `extensions_save`, `extensions_oauth_begin`, `extensions_delete` |
 | **Уведомления** | `notifications_list`, `notifications_summary`, `notifications_filters`, `notifications_read`, `notifications_settings`, `notifications_settings_save` |
-| **Справочники** | `operbots_catalog` — платформы с их пределами, виды узлов с настройками, разделы маркета, виды ИИ-сервисов, права |
+| **Справочники** | `operbots_catalog` — платформы с их пределами, виды узлов с настройками, разделы маркета, шаблоны дел (`case_templates`), виды ИИ-сервисов, права |
 
-31 инструмент помечен `danger`: клиент получает подсказку об опасном действии. Удаление дела, бота,
+33 инструмента помечены `danger`: клиент получает подсказку об опасном действии. Удаление дела, бота,
 сценария, диалога и базы знаний целиком, передача дела другому владельцу и запуск
 рассылки требуют вдобавок названия дословно: случайный вызов не сотрёт и не разошлёт.
 
-Режим `OPERBOTS_READ_ONLY=1` оставляет 56 инструментов: всё чтение плюс `operbots_login`
+Режим `OPERBOTS_READ_ONLY=1` оставляет 61 инструмент: всё чтение плюс `operbots_login`
 и `operbots_logout` — они правят не панель, а токен на этой машине, и без них человек
 с отозванным токеном остался бы с советом войти и без способа это сделать.
 
@@ -161,7 +163,36 @@ JSON-файл `password_file` с полями `current_password` и `new_passwor
 `knowledge_search`, `ai_test` и `flows_simulate` могут обращаться к настоящему ИИ-сервису
 и расходовать его лимиты, поэтому в режиме чтения недоступны.
 
+### ИИ: Timeweb, файлы, аудио и задачи
+
+`ai_save kind=timeweb` поддерживает Gateway и Agent через `options.service_type`.
+Для Agent нужен `options.access_id` и токен в `credentials.api_key`.
+Актуальные возможности режима и поля настроек доступны в
+`operbots_catalog what=ai_kinds kind=timeweb`; список моделей — `ai_models`.
+Сценарии принимают `trigger.ai_job`, `action.ai_transcribe`, `action.ai_speech`,
+`action.ai_video` и `action.ai_batch`; настройки узлов берутся из каталога панели.
+
+`ai_files_upload` принимает локальный абсолютный путь. Предел MCP: 20 МиБ для
+`user_data`/`messages`, 50 МиБ для `batch`; меньший предел панели сохраняется.
+Для `user_data`/`messages` обязателен непустой список `target_models`.
+При пустом `remote_id` файл уже сохранён в панели, повторная загрузка создаст копию.
+Скачивание не перезаписывает файлы, ограничено 100 МиБ и удаляет незавершённый файл.
+
+Для `ai_jobs_create` нужен явный `idempotency_key`: повтор того же запроса должен
+использовать тот же ключ. При неопределённом результате отправки сначала прочитайте
+задачу и кандидатов, затем явно выберите `remote_id` для `ai_jobs_reconcile`.
+`ai_jobs_cancel` отменяет только Batch. Инструменты не запускают скрытые повторы.
+
+`ai_stream` собирает SSE-ответ и возвращает полный текст, расход и ID ответа;
+повреждённый или незавершённый поток возвращает ошибку. Внешние запросы к моделям,
+потоковые пробы, аудио, загрузка, обновление файлов и сверка задач недоступны в
+режиме чтения. Эти операции могут расходовать лимиты сервиса.
+
 ### Заявки и контрагенты
+
+Новое дело можно создать из `template_key` каталога `case_templates`, передав
+`include_examples=false`, чтобы пропустить учебные диалоги и заявки.
+Эти параметры доступны только при создании; изменение существующего дела их отклоняет.
 
 Карточки возвращают все поля, задачи, историю и доступные действия. Для изменения
 заявки передавайте актуальный `revision`, для типа — `version`; конфликт возвращается

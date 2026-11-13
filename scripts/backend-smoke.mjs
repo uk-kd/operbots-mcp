@@ -43,6 +43,21 @@ try {
   await call(owner, 'bots_status', { bot: fixture.bot_id });
   await call(owner, 'bots_webhook_info');
   assertions += 4;
+  await call(owner, 'ai_files_list');
+  await call(owner, 'ai_jobs_list');
+  await call(readonly, 'ai_files_list');
+  await call(readonly, 'ai_jobs_list');
+  await call(viewer, 'ai_files_list', {}, true);
+  await call(viewer, 'ai_jobs_list', {}, true);
+  await call(owner, 'ai_save', { name: 'QA Timeweb', kind: 'timeweb', credentials: { api_key: 'qa-only' },
+    options: { service_type: 'agent', access_id: 'qa-access' } });
+  const timeweb = (await get(`/cases/${fixture.case_id}/ai-providers`)).find(provider => provider.name === 'QA Timeweb');
+  assert.equal(timeweb.kind, 'timeweb');
+  assert.equal(timeweb.options.service_type, 'agent');
+  const catalog = await call(owner, 'operbots_catalog', { what: 'ai_kinds', kind: 'timeweb' });
+  assert.ok(catalog.includes('service_type') && catalog.includes('agent'));
+  await call(owner, 'ai_delete', { provider: timeweb.id });
+  assertions += 9;
   await call(owner, 'members_list');
   await call(owner, 'users_search', { query: 'Viewer' });
   await call(owner, 'market_list');
@@ -175,7 +190,9 @@ try {
   await call(owner, 'notifications_list');
   await call(owner, 'notifications_filters');
   const notificationSettings = await get('/notifications/settings');
-  const kind = notificationSettings.kinds[0].kind;
+  const kind = notificationSettings.kinds.find(item => !item.kind.startsWith('moderation.')).kind;
+  const requiredKind = notificationSettings.kinds.find(item => item.kind.startsWith('moderation.')).kind;
+  await call(owner, 'notifications_settings_save', { kinds: { [requiredKind]: false } }, true);
   await call(owner, 'notifications_settings_save', { kinds: { [kind]: false } });
   assert.equal((await get('/notifications/settings')).kinds.find(item => item.kind === kind).enabled, false);
   await call(owner, 'notifications_read', { all: true });

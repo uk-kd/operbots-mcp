@@ -62,21 +62,22 @@ export class OperbotsApi {
     filePath: string,
     fields: Record<string, string | number | boolean> = {},
     contentType?: string,
+    maxBytes = 20 * 1024 * 1024,
   ): Promise<T> {
     requireLocalPath(filePath);
     const info = await stat(filePath);
     if (!info.isFile()) throw new ConfigError('Укажите путь к файлу, а не к папке.');
-    const maxBytes = 20 * 1024 * 1024;
-    if (info.size > maxBytes) throw new ConfigError('Файл больше 20 МиБ — предел загрузки панели.');
+    const sizeError = `Файл больше ${maxBytes / (1024 * 1024)} МиБ — предел загрузки MCP.`;
+    if (info.size > maxBytes) throw new ConfigError(sizeError);
     const data = await readFile(filePath);
-    if (data.length > maxBytes) throw new ConfigError('Файл больше 20 МиБ — предел загрузки панели.');
+    if (data.length > maxBytes) throw new ConfigError(sizeError);
 
     const form = new FormData();
     const mediaTypes: Record<string, string> = {
       '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
       '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
       '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
-      '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json',
+      '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.jsonl': 'application/jsonl',
     };
     form.append('file', new Blob([data], { type: contentType || mediaTypes[extname(filePath).toLowerCase()] || 'application/octet-stream' }), basename(filePath));
     for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
@@ -122,6 +123,16 @@ export class OperbotsApi {
   /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */
   async text(path: string, query?: Query): Promise<string> {
     const response = await this.request('GET', path, { query });
+    try {
+      return await parseText(response);
+    } catch (error) {
+      throw enrich(error);
+    }
+  }
+
+  /** Потоковая проба ИИ возвращает SSE; инструмент собирает итоговый ответ. */
+  async postText(path: string, body: unknown): Promise<string> {
+    const response = await this.request('POST', path, { body });
     try {
       return await parseText(response);
     } catch (error) {

@@ -7478,14 +7478,14 @@ var OperbotsApi = class {
     return this.call("DELETE", path, { query });
   }
   /** Загрузка локального файла: тот же multipart, которым пользуется панель. */
-  async upload(path, filePath, fields3 = {}, contentType) {
+  async upload(path, filePath, fields3 = {}, contentType, maxBytes = 20 * 1024 * 1024) {
     requireLocalPath(filePath);
     const info = await stat2(filePath);
     if (!info.isFile()) throw new ConfigError("\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043F\u0443\u0442\u044C \u043A \u0444\u0430\u0439\u043B\u0443, \u0430 \u043D\u0435 \u043A \u043F\u0430\u043F\u043A\u0435.");
-    const maxBytes = 20 * 1024 * 1024;
-    if (info.size > maxBytes) throw new ConfigError("\u0424\u0430\u0439\u043B \u0431\u043E\u043B\u044C\u0448\u0435 20 \u041C\u0438\u0411 \u2014 \u043F\u0440\u0435\u0434\u0435\u043B \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0438 \u043F\u0430\u043D\u0435\u043B\u0438.");
+    const sizeError = `\u0424\u0430\u0439\u043B \u0431\u043E\u043B\u044C\u0448\u0435 ${maxBytes / (1024 * 1024)} \u041C\u0438\u0411 \u2014 \u043F\u0440\u0435\u0434\u0435\u043B \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0438 MCP.`;
+    if (info.size > maxBytes) throw new ConfigError(sizeError);
     const data2 = await readFile2(filePath);
-    if (data2.length > maxBytes) throw new ConfigError("\u0424\u0430\u0439\u043B \u0431\u043E\u043B\u044C\u0448\u0435 20 \u041C\u0438\u0411 \u2014 \u043F\u0440\u0435\u0434\u0435\u043B \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0438 \u043F\u0430\u043D\u0435\u043B\u0438.");
+    if (data2.length > maxBytes) throw new ConfigError(sizeError);
     const form = new FormData();
     const mediaTypes = {
       ".jpg": "image/jpeg",
@@ -7504,7 +7504,8 @@ var OperbotsApi = class {
       ".pdf": "application/pdf",
       ".txt": "text/plain",
       ".csv": "text/csv",
-      ".json": "application/json"
+      ".json": "application/json",
+      ".jsonl": "application/jsonl"
     };
     form.append("file", new Blob([data2], { type: contentType || mediaTypes[extname(filePath).toLowerCase()] || "application/octet-stream" }), basename(filePath));
     for (const [key, value] of Object.entries(fields3)) form.append(key, String(value));
@@ -7547,6 +7548,15 @@ var OperbotsApi = class {
   /** Ответ, который панель отдаёт готовым файлом: выгрузка переписки. */
   async text(path, query) {
     const response = await this.request("GET", path, { query });
+    try {
+      return await parseText(response);
+    } catch (error51) {
+      throw enrich(error51);
+    }
+  }
+  /** Потоковая проба ИИ возвращает SSE; инструмент собирает итоговый ответ. */
+  async postText(path, body2) {
+    const response = await this.request("POST", path, { body: body2 });
     try {
       return await parseText(response);
     } catch (error51) {
@@ -7677,8 +7687,13 @@ var NODE_KINDS = [
   "trigger.media",
   "trigger.event",
   "trigger.fallback",
+  "trigger.ai_job",
   "action.message",
   "action.ai",
+  "action.ai_transcribe",
+  "action.ai_speech",
+  "action.ai_video",
+  "action.ai_batch",
   "action.condition",
   "action.switch",
   "action.edit",
@@ -7734,7 +7749,7 @@ var MARKET_CATEGORIES = [
 ];
 var MARKET_SOURCES = ["project", "community"];
 var MARKET_SORTS = ["popular", "new", "likes"];
-var AI_KINDS = ["gigachat", "yandexgpt", "openai", "openrouter", "custom"];
+var AI_KINDS = ["gigachat", "yandexgpt", "openai", "openrouter", "timeweb", "custom"];
 var ROLE_PRESETS = ["owner", "admin", "builder", "operator", "observer"];
 var BOT_PLATFORMS = ["telegram", "max"];
 var BOT_MODES = ["polling", "webhook"];
@@ -7747,6 +7762,7 @@ var AI_CREDENTIALS = {
   yandexgpt: "api_key (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E), folder_id (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E)",
   openai: "api_key (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E)",
   openrouter: "api_key (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E)",
+  timeweb: "api_key (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E); \u0440\u0435\u0436\u0438\u043C agent: options.service_type=agent \u0438 options.access_id",
   custom: "api_key (\u043F\u043E \u0436\u0435\u043B\u0430\u043D\u0438\u044E); \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D base_url"
 };
 var AI_MODELS = {
@@ -7754,7 +7770,8 @@ var AI_MODELS = {
   yandexgpt: "yandexgpt-lite, yandexgpt, yandexgpt-32k (\u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E yandexgpt-lite)",
   openai: "gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, o4-mini (\u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E gpt-4o-mini)",
   openrouter: "openai/gpt-4o-mini, anthropic/claude-3.5-sonnet, google/gemini-2.0-flash-001, meta-llama/llama-3.3-70b-instruct, deepseek/deepseek-chat",
-  custom: "\u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043E\u0442 \u0432\u0430\u0448\u0435\u0433\u043E \u0441\u0435\u0440\u0432\u0435\u0440\u0430; \u043F\u043E\u043B\u0435 \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E \u0437\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443\u044E"
+  custom: "\u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043E\u0442 \u0432\u0430\u0448\u0435\u0433\u043E \u0441\u0435\u0440\u0432\u0435\u0440\u0430; \u043F\u043E\u043B\u0435 \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E \u0437\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u044C \u0432\u0440\u0443\u0447\u043D\u0443\u044E",
+  timeweb: "\u0430\u043A\u0442\u0443\u0430\u043B\u044C\u043D\u044B\u0435 \u043C\u043E\u0434\u0435\u043B\u0438: ai_models; \u0440\u0435\u0436\u0438\u043C\u044B \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B: operbots_catalog what=ai_kinds kind=timeweb"
 };
 
 // src/cli.ts
@@ -31939,6 +31956,11 @@ var Context = class {
 function pickByName(list, wanted) {
   const needle = wanted.trim().toLowerCase();
   if (!needle) throw new ApiError(400, "name_required", "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0438\u043B\u0438 \u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440.");
+  if (UUID.test(needle)) {
+    const found = list.find((item) => item.id.toLowerCase() === needle);
+    if (found) return found;
+    throw new ApiError(404, "not_found", `\u0417\u0430\u043F\u0438\u0441\u044C \u0441 \u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440\u043E\u043C ${wanted} \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430.`);
+  }
   const exact = list.filter((item) => item.name.toLowerCase() === needle);
   if (exact.length === 1 && exact[0]) return exact[0];
   const partial2 = exact.length > 1 ? exact : list.filter((item) => item.name.toLowerCase().includes(needle));
@@ -32859,6 +32881,274 @@ ${result.token}
   })
 ];
 
+// src/tools/ai-media.ts
+init_errors();
+var providerField = external_exports.string().min(1).describe("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435: \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0438\u043B\u0438 \u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440.");
+var modelField = external_exports.string().max(120).optional();
+var optionsField = external_exports.record(external_exports.string(), external_exports.unknown()).optional();
+var aiMediaTools = [
+  tool({
+    name: "ai_models",
+    title: "\u0410\u043A\u0442\u0443\u0430\u043B\u044C\u043D\u044B\u0435 \u043C\u043E\u0434\u0435\u043B\u0438 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F",
+    kind: "write",
+    description: "\u0417\u0430\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0435\u0442 \u0441\u043F\u0438\u0441\u043E\u043A \u043C\u043E\u0434\u0435\u043B\u0435\u0439 \u0443 \u0441\u0435\u0440\u0432\u0438\u0441\u0430 \u043F\u043E \u043A\u043B\u044E\u0447\u0443 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F. \u042D\u0442\u043E \u0432\u043D\u0435\u0448\u043D\u0438\u0439 \u0437\u0430\u043F\u0440\u043E\u0441; \u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E\u0441\u0442\u0438 \u0440\u0435\u0436\u0438\u043C\u0430 \u0441\u043C\u043E\u0442\u0440\u0438\u0442\u0435 \u0432 operbots_catalog what=ai_kinds.",
+    input: { case: caseField, provider: providerField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      return report("\u041C\u043E\u0434\u0435\u043B\u0438 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F.", await ctx.api.post(`/cases/${found.id}/ai-providers/${provider.id}/models`));
+    }
+  }),
+  tool({
+    name: "ai_stream",
+    title: "\u041F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u043F\u043E\u0442\u043E\u043A\u043E\u0432\u044B\u0439 \u043E\u0442\u0432\u0435\u0442 \u0418\u0418",
+    kind: "write",
+    description: "\u0412\u044B\u043F\u043E\u043B\u043D\u044F\u0435\u0442 \u043F\u043B\u0430\u0442\u043D\u0443\u044E \u043F\u043E\u0442\u043E\u043A\u043E\u0432\u0443\u044E \u043F\u0440\u043E\u0431\u0443 chat/responses \u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442 \u0441\u043E\u0431\u0440\u0430\u043D\u043D\u044B\u0439 \u043E\u0442\u0432\u0435\u0442, ID \u0438 \u0440\u0430\u0441\u0445\u043E\u0434. \u041E\u0431\u0440\u044B\u0432 \u0438 \u043E\u0448\u0438\u0431\u043A\u0430 \u043F\u043E\u0442\u043E\u043A\u0430 \u0432\u043E\u0437\u0432\u0440\u0430\u0449\u0430\u044E\u0442\u0441\u044F \u043E\u0448\u0438\u0431\u043A\u043E\u0439. \u041D\u0435 \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u0439\u0442\u0435 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438 \u043F\u043E\u0441\u043B\u0435 \u0442\u0430\u0439\u043C\u0430\u0443\u0442\u0430.",
+    input: {
+      case: caseField,
+      provider: providerField,
+      prompt: external_exports.string().min(1).max(2e3),
+      mode: external_exports.enum(["chat", "responses"]).optional(),
+      model: modelField
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      const { case: _, provider: __, ...payload } = args;
+      const text = await ctx.api.postText(`/cases/${found.id}/ai-providers/${provider.id}/stream`, body(payload));
+      return report("\u041F\u043E\u0442\u043E\u043A\u043E\u0432\u0430\u044F \u043F\u0440\u043E\u0431\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430.", streamResult(text));
+    }
+  }),
+  tool({
+    name: "ai_speech",
+    title: "\u0421\u0438\u043D\u0442\u0435\u0437\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0440\u0435\u0447\u044C",
+    kind: "write",
+    description: "\u041F\u043B\u0430\u0442\u043D\u044B\u0439 \u0441\u0438\u043D\u0442\u0435\u0437 \u0440\u0435\u0447\u0438. \u0412\u043E\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442 \u0444\u0430\u0439\u043B \u0434\u0435\u043B\u0430; \u0441\u043A\u0430\u0447\u0430\u0439\u0442\u0435 \u0435\u0433\u043E \u0447\u0435\u0440\u0435\u0437 ai_files_download. \u0412\u043E\u0437\u043C\u043E\u0436\u043D\u043E\u0441\u0442\u0438 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B \u043C\u043E\u0434\u0435\u043B\u0438 \u0431\u0435\u0440\u0438\u0442\u0435 \u0438\u0437 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0430.",
+    input: {
+      case: caseField,
+      provider: providerField,
+      text: external_exports.string().min(1).max(5e3),
+      model: modelField,
+      voice: external_exports.string().max(64).optional(),
+      response_format: external_exports.string().max(16).optional(),
+      speed: external_exports.number().min(0.25).max(4).optional(),
+      instructions: external_exports.string().max(1e3).optional(),
+      options: optionsField
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      const { case: _, provider: __, ...payload } = args;
+      return report("\u0424\u0430\u0439\u043B \u0440\u0435\u0447\u0438 \u0441\u043E\u0437\u0434\u0430\u043D.", await ctx.api.post(`/cases/${found.id}/ai-providers/${provider.id}/speech`, body(payload)));
+    }
+  }),
+  tool({
+    name: "ai_transcribe",
+    title: "\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043E\u0432\u0430\u0442\u044C \u0430\u0443\u0434\u0438\u043E\u0444\u0430\u0439\u043B",
+    kind: "write",
+    description: "\u041F\u043B\u0430\u0442\u043D\u0430\u044F \u0440\u0430\u0441\u0448\u0438\u0444\u0440\u043E\u0432\u043A\u0430 \u0444\u0430\u0439\u043B\u0430 \u0434\u0435\u043B\u0430. \u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0437\u0432\u0443\u043A \u0447\u0435\u0440\u0435\u0437 ai_files_upload; file \u2014 UUID \u0444\u0430\u0439\u043B\u0430 \u043F\u0430\u043D\u0435\u043B\u0438.",
+    input: {
+      case: caseField,
+      provider: providerField,
+      file: external_exports.uuid(),
+      model: modelField,
+      language: external_exports.string().max(16).optional(),
+      prompt: external_exports.string().max(2e3).optional(),
+      response_format: external_exports.string().max(16).optional(),
+      options: optionsField
+    },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      const { case: _, provider: __, file: file2, ...payload } = args;
+      return report("\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043E\u0432\u043A\u0430.", await ctx.api.post(`/cases/${found.id}/ai-providers/${provider.id}/transcribe`, body({ file_id: file2, ...payload })));
+    }
+  }),
+  tool({
+    name: "ai_files_list",
+    title: "\u0424\u0430\u0439\u043B\u044B \u0418\u0418 \u0434\u0435\u043B\u0430",
+    kind: "read",
+    description: "\u0424\u0430\u0439\u043B\u044B \u0418\u0418 \u0441 \u043D\u0430\u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435\u043C, \u0440\u0430\u0437\u043C\u0435\u0440\u043E\u043C, \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u043E\u0439 \u043A \u0441\u0435\u0440\u0432\u0438\u0441\u0443 \u0438 ID \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u043E\u0432 \u0437\u0430\u0434\u0430\u0447.",
+    input: { case: caseField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0424\u0430\u0439\u043B\u044B \u0418\u0418.", await ctx.api.get(`/cases/${found.id}/ai-files`));
+    }
+  }),
+  tool({
+    name: "ai_files_get",
+    title: "\u041C\u0435\u0442\u0430\u0434\u0430\u043D\u043D\u044B\u0435 \u0444\u0430\u0439\u043B\u0430 \u0418\u0418",
+    kind: "read",
+    description: "\u0427\u0438\u0442\u0430\u0435\u0442 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0443 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u043E\u0433\u043E \u0444\u0430\u0439\u043B\u0430 \u0434\u0435\u043B\u0430.",
+    input: { case: caseField, file: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0424\u0430\u0439\u043B \u0418\u0418.", await ctx.api.get(`/cases/${found.id}/ai-files/${args.file}`));
+    }
+  }),
+  tool({
+    name: "ai_files_upload",
+    title: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0444\u0430\u0439\u043B \u0418\u0418",
+    kind: "write",
+    description: "\u0421\u043E\u0445\u0440\u0430\u043D\u044F\u0435\u0442 \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0439 \u0444\u0430\u0439\u043B \u0432 \u0434\u0435\u043B\u0435 \u0438 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442 \u043A\u043E\u043F\u0438\u044E \u0441\u0435\u0440\u0432\u0438\u0441\u0443. \u0414\u043B\u044F user_data/messages \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u044B target_models. \u041B\u0438\u043C\u0438\u0442 MCP: 20 \u041C\u0438\u0411, batch JSONL \u2014 50 \u041C\u0438\u0411; \u043F\u0430\u043D\u0435\u043B\u044C \u043C\u043E\u0436\u0435\u0442 \u0438\u043C\u0435\u0442\u044C \u043C\u0435\u043D\u044C\u0448\u0438\u0439 \u043B\u0438\u043C\u0438\u0442. \u041F\u0440\u0438 \u043E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0438\u0438 remote_id \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u0430\u044F \u043A\u043E\u043F\u0438\u044F \u0443\u0436\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0430: \u043D\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0439\u0442\u0435 \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u043E \u0432\u0441\u043B\u0435\u043F\u0443\u044E.",
+    input: {
+      case: caseField,
+      provider: providerField,
+      path: external_exports.string().min(1).describe("\u0410\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u044B\u0439 \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u0443\u0442\u044C."),
+      purpose: external_exports.enum(["user_data", "messages", "batch"]),
+      target_models: external_exports.array(external_exports.string().trim().min(1)).optional().describe("\u0426\u0435\u043B\u0435\u0432\u044B\u0435 \u043C\u043E\u0434\u0435\u043B\u0438 \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u044B \u0434\u043B\u044F user_data/messages; \u0434\u043B\u044F batch \u043D\u0435 \u043D\u0443\u0436\u043D\u044B.")
+    },
+    async run(args, ctx) {
+      if (args.purpose !== "batch" && !args.target_models?.length) throw new ApiError(400, "target_models_required", "\u0414\u043B\u044F user_data/messages \u0443\u043A\u0430\u0436\u0438\u0442\u0435 \u043D\u0435\u043F\u0443\u0441\u0442\u043E\u0439 target_models.");
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      return report("\u0424\u0430\u0439\u043B \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D; \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 remote_id.", await ctx.api.upload(
+        `/cases/${found.id}/ai-files`,
+        args.path,
+        { provider_id: provider.id, purpose: args.purpose, target_models: (args.target_models ?? []).join(",") },
+        void 0,
+        (args.purpose === "batch" ? 50 : 20) * 1024 * 1024
+      ));
+    }
+  }),
+  tool({
+    name: "ai_files_refresh",
+    title: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043C\u0435\u0442\u0430\u0434\u0430\u043D\u043D\u044B\u0435 \u0444\u0430\u0439\u043B\u0430 \u0418\u0418",
+    kind: "write",
+    description: "\u0417\u0430\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0435\u0442 \u043C\u0435\u0442\u0430\u0434\u0430\u043D\u043D\u044B\u0435 \u0443\u0434\u0430\u043B\u0451\u043D\u043D\u043E\u0439 \u043A\u043E\u043F\u0438\u0438 \u0443 \u0441\u0435\u0440\u0432\u0438\u0441\u0430 \u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u044F\u0435\u0442 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0443 \u043F\u0430\u043D\u0435\u043B\u0438.",
+    input: { case: caseField, file: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u041A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0430.", await ctx.api.post(`/cases/${found.id}/ai-files/${args.file}/refresh`));
+    }
+  }),
+  tool({
+    name: "ai_files_download",
+    title: "\u0421\u043A\u0430\u0447\u0430\u0442\u044C \u0444\u0430\u0439\u043B \u0418\u0418",
+    kind: "read",
+    description: "\u0421\u043E\u0445\u0440\u0430\u043D\u044F\u0435\u0442 \u0441\u043E\u0434\u0435\u0440\u0436\u0438\u043C\u043E\u0435 \u0444\u0430\u0439\u043B\u0430 \u0434\u0435\u043B\u0430 \u043F\u043E \u0430\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u043E\u043C\u0443 \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u043E\u043C\u0443 \u043F\u0443\u0442\u0438. \u041D\u0435 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u044B\u0432\u0430\u0435\u0442 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0435 \u0444\u0430\u0439\u043B\u044B; \u043F\u0440\u0435\u0434\u0435\u043B 100 \u041C\u0438\u0411.",
+    input: { case: caseField, file: external_exports.uuid(), destination: external_exports.string().min(1) },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0424\u0430\u0439\u043B \u0441\u043A\u0430\u0447\u0430\u043D.", await ctx.api.download(`/cases/${found.id}/ai-files/${args.file}/content`, args.destination));
+    }
+  }),
+  tool({
+    name: "ai_files_delete",
+    title: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C \u0444\u0430\u0439\u043B \u0418\u0418",
+    kind: "danger",
+    description: "\u0423\u0434\u0430\u043B\u044F\u0435\u0442 \u0443\u0434\u0430\u043B\u0451\u043D\u043D\u0443\u044E \u043A\u043E\u043F\u0438\u044E \u0438 \u0444\u0430\u0439\u043B \u0434\u0435\u043B\u0430. \u041E\u0448\u0438\u0431\u043A\u0430 \u0441\u0435\u0440\u0432\u0438\u0441\u0430 \u043E\u0441\u0442\u0430\u043D\u0430\u0432\u043B\u0438\u0432\u0430\u0435\u0442 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0435; \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u044F \u043D\u0435\u043E\u0431\u0440\u0430\u0442\u0438\u043C\u0430.",
+    input: { case: caseField, file: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0424\u0430\u0439\u043B \u0443\u0434\u0430\u043B\u0451\u043D.", await ctx.api.delete(`/cases/${found.id}/ai-files/${args.file}`));
+    }
+  }),
+  tool({
+    name: "ai_jobs_list",
+    title: "\u0417\u0430\u0434\u0430\u0447\u0438 \u0418\u0418 \u0434\u0435\u043B\u0430",
+    kind: "read",
+    description: "\u0421\u043F\u0438\u0441\u043E\u043A Batch/Video \u0437\u0430\u0434\u0430\u0447 \u0441 \u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435\u043C, \u043E\u0448\u0438\u0431\u043A\u0430\u043C\u0438 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u043C\u0438 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430\u043C\u0438. \u041D\u0435 \u0437\u0430\u043F\u0443\u0441\u043A\u0430\u0435\u0442 \u043E\u043F\u0440\u043E\u0441 \u0432\u043D\u0435\u0448\u043D\u0435\u0433\u043E \u0441\u0435\u0440\u0432\u0438\u0441\u0430.",
+    input: { case: caseField },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0417\u0430\u0434\u0430\u0447\u0438 \u0418\u0418.", await ctx.api.get(`/cases/${found.id}/ai-jobs`));
+    }
+  }),
+  tool({
+    name: "ai_jobs_get",
+    title: "\u041A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u0437\u0430\u0434\u0430\u0447\u0438 \u0418\u0418",
+    kind: "read",
+    description: "\u0421\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u043E\u0435 \u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435 \u0437\u0430\u0434\u0430\u0447\u0438, remote_id, input_file_id \u0438 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442. \u0424\u0430\u0439\u043B\u044B \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u0441\u043A\u0430\u0447\u0438\u0432\u0430\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u0435\u0437 ai_files_download.",
+    input: { case: caseField, job: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0417\u0430\u0434\u0430\u0447\u0430 \u0418\u0418.", await ctx.api.get(`/cases/${found.id}/ai-jobs/${args.job}`));
+    }
+  }),
+  tool({
+    name: "ai_jobs_create",
+    title: "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u0437\u0430\u0434\u0430\u0447\u0443 Batch \u0438\u043B\u0438 Video",
+    kind: "write",
+    description: "\u0421\u0442\u0430\u0432\u0438\u0442 \u043F\u043B\u0430\u0442\u043D\u0443\u044E \u0437\u0430\u0434\u0430\u0447\u0443. \u0414\u043B\u044F batch \u043D\u0443\u0436\u0435\u043D input_file (JSONL purpose=batch) \u0438 payload.endpoint; \u0434\u043B\u044F video \u2014 payload.prompt \u0438 \u043C\u043E\u0434\u0435\u043B\u044C. idempotency_key \u0437\u0430\u0434\u0430\u0439\u0442\u0435 \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u0439\u0442\u0435 \u043F\u0440\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0435 \u0442\u043E\u0433\u043E \u0436\u0435 \u0437\u0430\u043F\u0440\u043E\u0441\u0430; \u043D\u043E\u0432\u044B\u0439 \u043A\u043B\u044E\u0447 \u0441\u043E\u0437\u0434\u0430\u0451\u0442 \u043D\u043E\u0432\u0443\u044E \u0437\u0430\u0434\u0430\u0447\u0443.",
+    input: {
+      case: caseField,
+      provider: providerField,
+      kind: external_exports.enum(["batch", "video"]),
+      input_file: external_exports.uuid().optional(),
+      payload: optionsField,
+      idempotency_key: external_exports.string().trim().min(1).max(120)
+    },
+    async run(args, ctx) {
+      if (args.kind === "batch" && !args.input_file) throw new ApiError(400, "input_file_required", "\u0414\u043B\u044F batch \u043D\u0443\u0436\u0435\u043D input_file \u0438\u0437 ai_files_upload.");
+      const found = await ctx.resolveCase(args.case);
+      const provider = await findProvider(ctx, found.id, args.provider);
+      return report("\u0417\u0430\u0434\u0430\u0447\u0430 \u0441\u043E\u0437\u0434\u0430\u043D\u0430.", await ctx.api.post(`/cases/${found.id}/ai-jobs`, body({
+        provider_id: provider.id,
+        kind: args.kind,
+        input_file_id: args.input_file,
+        payload: args.payload,
+        idempotency_key: args.idempotency_key
+      })));
+    }
+  }),
+  tool({
+    name: "ai_jobs_cancel",
+    title: "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C Batch-\u0437\u0430\u0434\u0430\u0447\u0443",
+    kind: "danger",
+    description: "\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442 \u043E\u0442\u043C\u0435\u043D\u0443 Batch-\u0437\u0430\u0434\u0430\u0447\u0438 \u0441\u0435\u0440\u0432\u0438\u0441\u0443. \u0423\u0436\u0435 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u043D\u0430\u044F \u0440\u0430\u0431\u043E\u0442\u0430 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043E\u043F\u043B\u0430\u0447\u0435\u043D\u0430. Video \u044D\u0442\u043E\u0442 \u043C\u0430\u0440\u0448\u0440\u0443\u0442 \u043D\u0435 \u043E\u0442\u043C\u0435\u043D\u044F\u0435\u0442.",
+    input: { case: caseField, job: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0420\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043E\u0442\u043C\u0435\u043D\u044B.", await ctx.api.post(`/cases/${found.id}/ai-jobs/${args.job}/cancel`));
+    }
+  }),
+  tool({
+    name: "ai_jobs_candidates",
+    title: "\u041A\u0430\u043D\u0434\u0438\u0434\u0430\u0442\u044B \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F Batch-\u0437\u0430\u0434\u0430\u0447\u0438",
+    kind: "write",
+    description: "\u0417\u0430\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0435\u0442 \u0432\u043D\u0435\u0448\u043D\u0438\u0439 \u0441\u043F\u0438\u0441\u043E\u043A Batch-\u0437\u0430\u0434\u0430\u0447 \u0434\u043B\u044F \u0441\u0432\u0435\u0440\u043A\u0438 \u043F\u043E\u0441\u043B\u0435 \u043D\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D\u043D\u043E\u0433\u043E \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u043E\u0442\u043F\u0440\u0430\u0432\u043A\u0438. \u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 remote_id \u044F\u0432\u043D\u043E \u0438 \u043F\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0432 ai_jobs_reconcile.",
+    input: { case: caseField, job: external_exports.uuid() },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u041A\u0430\u043D\u0434\u0438\u0434\u0430\u0442\u044B \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F.", await ctx.api.get(`/cases/${found.id}/ai-jobs/${args.job}/reconcile`));
+    }
+  }),
+  tool({
+    name: "ai_jobs_reconcile",
+    title: "\u041F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0437\u0430\u0434\u0430\u0447\u0443 \u0418\u0418 \u043A \u0432\u043D\u0435\u0448\u043D\u0435\u0439",
+    kind: "write",
+    description: "\u0412\u043E\u0441\u0441\u0442\u0430\u043D\u0430\u0432\u043B\u0438\u0432\u0430\u0435\u0442 \u0441\u0432\u044F\u0437\u044C \u043F\u043E \u044F\u0432\u043D\u043E \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u043E\u043C\u0443 remote_id \u043F\u043E\u0441\u043B\u0435 \u043D\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D\u043D\u043E\u0433\u043E \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u043E\u0442\u043F\u0440\u0430\u0432\u043A\u0438. \u041F\u0430\u043D\u0435\u043B\u044C \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442 \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0438\u0435; \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u043E \u043F\u043B\u0430\u0442\u043D\u0443\u044E \u0437\u0430\u0434\u0430\u0447\u0443 \u043D\u0435 \u0441\u043E\u0437\u0434\u0430\u0451\u0442.",
+    input: { case: caseField, job: external_exports.uuid(), remote_id: external_exports.string().trim().min(1).max(120) },
+    async run(args, ctx) {
+      const found = await ctx.resolveCase(args.case);
+      return report("\u0421\u0432\u044F\u0437\u044C \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u0430.", await ctx.api.post(`/cases/${found.id}/ai-jobs/${args.job}/reconcile`, { remote_id: args.remote_id }));
+    }
+  })
+];
+function streamResult(text) {
+  const result = { text: "" };
+  let done = false;
+  for (const event of text.replace(/\r\n?/g, "\n").split("\n\n")) {
+    const data2 = event.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+    if (!data2.trim()) continue;
+    let chunk;
+    try {
+      chunk = JSON.parse(data2);
+    } catch {
+      throw new ApiError(502, "bad_stream", "\u041F\u043E\u0432\u0440\u0435\u0436\u0434\u0451\u043D\u043D\u043E\u0435 \u0441\u043E\u0431\u044B\u0442\u0438\u0435 \u043F\u043E\u0442\u043E\u043A\u0430 \u0418\u0418.");
+    }
+    if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) throw new ApiError(502, "bad_stream", "\u041F\u043E\u0432\u0440\u0435\u0436\u0434\u0451\u043D\u043D\u043E\u0435 \u0441\u043E\u0431\u044B\u0442\u0438\u0435 \u043F\u043E\u0442\u043E\u043A\u0430 \u0418\u0418.");
+    const value = chunk;
+    if (value.error) throw new ApiError(502, "ai_stream_failed", String(value.error));
+    if (typeof value.text_delta === "string") result.text += value.text_delta;
+    for (const key of ["response_id", "model", "usage"]) if (value[key]) result[key] = value[key];
+    if (value.done === true) done = true;
+  }
+  if (!done) throw new ApiError(502, "incomplete_stream", "\u041F\u043E\u0442\u043E\u043A \u0418\u0418 \u043E\u0431\u043E\u0440\u0432\u0430\u043B\u0441\u044F \u0431\u0435\u0437 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u044F \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u044F.");
+  return result;
+}
+
 // src/tools/ai.ts
 var show = (provider) => ({
   \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435: provider.name,
@@ -32878,6 +33168,7 @@ var show = (provider) => ({
   \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u044F\u044F_\u043E\u0448\u0438\u0431\u043A\u0430: provider.last_error
 });
 var aiTools = [
+  ...aiMediaTools,
   tool({
     name: "ai_list",
     title: "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F \u043A \u0418\u0418-\u0441\u0435\u0440\u0432\u0438\u0441\u0430\u043C",
@@ -32993,7 +33284,8 @@ var aiTools = [
       }
       return report(`\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \xAB${provider.name}\xBB \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442.`, {
         \u043E\u0442\u0432\u0435\u0442: result.reply,
-        \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430_\u043C\u0441: result.latency_ms
+        \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430_\u043C\u0441: result.latency_ms,
+        response_id: result.response_id
       });
     }
   }),
@@ -33016,6 +33308,7 @@ var aiTools = [
 ];
 
 // src/tools/cases.ts
+init_errors();
 var caseTools = [
   tool({
     name: "cases_list",
@@ -33093,6 +33386,8 @@ var caseTools = [
       name: external_exports.string().min(2).max(120).optional().describe("\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0434\u0435\u043B\u0430."),
       description: external_exports.string().max(2e3).nullable().optional().describe("\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435; null \u2014 \u043E\u0447\u0438\u0441\u0442\u0438\u0442\u044C."),
       settings: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0434\u0435\u043B\u0430: \u043A\u0430\u0440\u0442\u0430 \u0446\u0435\u043B\u0438\u043A\u043E\u043C."),
+      template_key: external_exports.string().min(1).max(80).optional().describe("\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435: \u043A\u043B\u044E\u0447 \u0438\u0437 operbots_catalog what=case_templates."),
+      include_examples: external_exports.boolean().optional().describe("\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435: \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u0440\u0438\u043C\u0435\u0440\u044B \u0448\u0430\u0431\u043B\u043E\u043D\u0430. \u041F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E true."),
       emoji: external_exports.string().max(16).optional().describe("\u0417\u043D\u0430\u043A \u0434\u0435\u043B\u0430, \u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 \u{1F6CD}. \u041F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E \u25C6."),
       accent: external_exports.string().max(24).optional().describe("\u041E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u0438\u0435: platinum, signal, aurora, ultra, ember, moss, rose."),
       archived: external_exports.boolean().optional().describe("\u0423\u0431\u0440\u0430\u0442\u044C \u0434\u0435\u043B\u043E \u0432 \u0430\u0440\u0445\u0438\u0432 \u0438\u043B\u0438 \u0432\u0435\u0440\u043D\u0443\u0442\u044C \u0438\u0437 \u043D\u0435\u0433\u043E. \u0422\u043E\u043B\u044C\u043A\u043E \u043F\u0440\u0438 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0438.")
@@ -33109,7 +33404,11 @@ var caseTools = [
       if (!args.case) {
         if (!args.name) return "\u0427\u0442\u043E\u0431\u044B \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u0434\u0435\u043B\u043E, \u043D\u0443\u0436\u043D\u043E \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435.";
         const { is_archived, settings, ...fresh } = payload;
-        const created = await ctx.api.post("/cases", fresh);
+        const created = await ctx.api.post("/cases", body({
+          ...fresh,
+          template_key: args.template_key,
+          include_examples: args.include_examples
+        }));
         const followup = body({ is_archived, settings });
         if (Object.keys(followup).length) await ctx.api.patch(`/cases/${created.id}`, followup);
         ctx.forgetCases();
@@ -33118,6 +33417,9 @@ var caseTools = [
           \u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440: created.id,
           \u043A\u043E\u0440\u043E\u0442\u043A\u043E\u0435_\u0438\u043C\u044F: created.slug
         });
+      }
+      if (args.template_key !== void 0 || args.include_examples !== void 0) {
+        throw new ApiError(400, "creation_only", "template_key \u0438 include_examples \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u043F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0434\u0435\u043B\u0430.");
       }
       const found = await ctx.resolveCase(args.case);
       if (Object.keys(payload).length === 0) return "\u041D\u0435\u0447\u0435\u0433\u043E \u043C\u0435\u043D\u044F\u0442\u044C: \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u043D\u043E \u043D\u0438 \u043E\u0434\u043D\u043E\u0433\u043E \u043F\u043E\u043B\u044F.";
@@ -33220,7 +33522,7 @@ var catalogTools = [
     description: "\u0427\u0442\u043E \u043C\u043E\u0436\u043D\u043E \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C \u043F\u0440\u0438 \u0441\u0431\u043E\u0440\u043A\u0435: \u043F\u043B\u0430\u0442\u0444\u043E\u0440\u043C\u044B \u0441 \u0438\u0445 \u043F\u0440\u0435\u0434\u0435\u043B\u0430\u043C\u0438, \u0432\u0438\u0434\u044B \u0443\u0437\u043B\u043E\u0432 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u044F \u0441 \u043F\u043E\u043B\u043D\u044B\u043C \u0441\u043E\u0441\u0442\u0430\u0432\u043E\u043C \u0438\u0445 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043A, \u0440\u0430\u0437\u0434\u0435\u043B\u044B \u043C\u0430\u0440\u043A\u0435\u0442\u0430, \u0432\u0438\u0434\u044B \u0418\u0418-\u0441\u0435\u0440\u0432\u0438\u0441\u043E\u0432 \u0441 \u043D\u0443\u0436\u043D\u044B\u043C\u0438 \u043A\u043B\u044E\u0447\u0430\u043C\u0438 \u0438 \u043A\u0430\u0442\u0430\u043B\u043E\u0433 \u043F\u0440\u0430\u0432. \u0413\u043E\u0442\u043E\u0432\u044B\u0435 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0438 \u0438\u0449\u0438\u0442\u0435 \u0432 \u043C\u0430\u0440\u043A\u0435\u0442\u0435: market_list \u0438 market_install. \u0421\u043C\u043E\u0442\u0440\u0438\u0442\u0435 node_kinds \u043F\u0435\u0440\u0435\u0434 \u0442\u0435\u043C, \u043A\u0430\u043A \u0441\u043E\u0431\u0438\u0440\u0430\u0442\u044C \u0438\u043B\u0438 \u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439: config \u043A\u0430\u0436\u0434\u043E\u0433\u043E \u0443\u0437\u043B\u0430 \u043E\u043F\u0438\u0441\u0430\u043D \u0438\u043C\u0435\u043D\u043D\u043E \u0442\u0430\u043C \u2014 \u0438 \u043F\u0435\u0440\u0435\u0434\u0430\u0432\u0430\u0439\u0442\u0435 platform: \u0441\u0430\u043C\u0438 \u0443\u0437\u043B\u044B \u0443 \u043F\u043B\u0430\u0442\u0444\u043E\u0440\u043C \u043E\u0434\u043D\u0438 \u0438 \u0442\u0435 \u0436\u0435, \u0430 \u0432\u0430\u0440\u0438\u0430\u043D\u0442\u044B \u0432 \u0438\u0445 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0440\u0430\u0437\u043D\u044B\u0435 (\u0443 MAX \u043D\u0435\u0442 \u0440\u0430\u0437\u043C\u0435\u0442\u043A\u0438 MarkdownV2 \u0438 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0433\u043E \u0441\u0440\u0435\u0434\u0438 \u0432\u043B\u043E\u0436\u0435\u043D\u0438\u0439).",
     input: {
       case: caseField.describe("\u0414\u043B\u044F node_kinds: \u0434\u0435\u043B\u043E \u0441 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043D\u044B\u043C\u0438 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u044F\u043C\u0438."),
-      what: external_exports.enum(["platforms", "node_kinds", "market_categories", "ai_kinds", "permissions"]).describe("\u041A\u0430\u043A\u043E\u0439 \u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A \u043F\u043E\u043A\u0430\u0437\u0430\u0442\u044C."),
+      what: external_exports.enum(["platforms", "node_kinds", "market_categories", "case_templates", "ai_kinds", "permissions"]).describe("\u041A\u0430\u043A\u043E\u0439 \u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A \u043F\u043E\u043A\u0430\u0437\u0430\u0442\u044C."),
       kind: external_exports.string().optional().describe("\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u043F\u043E\u0434\u0440\u043E\u0431\u043D\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u043E\u0434\u0438\u043D \u0432\u0438\u0434: \u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440 action.ai \u0438\u043B\u0438 openai."),
       platform: external_exports.enum(BOT_PLATFORMS).optional().describe(
         "\u0414\u043B\u044F node_kinds: \u043F\u043E\u0434 \u043A\u0430\u043A\u0443\u044E \u043F\u043B\u0430\u0442\u0444\u043E\u0440\u043C\u0443 \u043E\u0442\u043E\u0431\u0440\u0430\u0442\u044C \u0432\u0430\u0440\u0438\u0430\u043D\u0442\u044B \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043A. \u0411\u0435\u0437 \u043D\u0435\u0433\u043E \u043F\u0440\u0438\u0434\u0451\u0442 \u043F\u043E\u043B\u043D\u044B\u0439 \u043D\u0430\u0431\u043E\u0440, \u0438 \u0441\u0446\u0435\u043D\u0430\u0440\u0438\u0439 \u043C\u043E\u0436\u043D\u043E \u0441\u043E\u0431\u0440\u0430\u0442\u044C \u0441 \u0432\u0430\u0440\u0438\u0430\u043D\u0442\u043E\u043C, \u043A\u043E\u0442\u043E\u0440\u043E\u0433\u043E \u0443 \u043F\u043B\u0430\u0442\u0444\u043E\u0440\u043C\u044B \u0431\u043E\u0442\u0430 \u043D\u0435\u0442."
@@ -33231,6 +33533,8 @@ var catalogTools = [
     },
     async run(args, ctx) {
       switch (args.what) {
+        case "case_templates":
+          return report("\u0428\u0430\u0431\u043B\u043E\u043D\u044B \u0434\u0435\u043B; \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 key \u0432 cases_save template_key.", await ctx.api.get("/cases/templates"));
         case "platforms": {
           const list = await ctx.api.get("/platforms");
           return report(
@@ -33306,6 +33610,9 @@ var catalogTools = [
               \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0430\u0446\u0438\u044F: item.docs_url,
               \u043C\u043E\u0434\u0435\u043B\u044C_\u043F\u043E_\u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E: item.default_model,
               \u043C\u043E\u0434\u0435\u043B\u0438: item.models,
+              \u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E\u0441\u0442\u0438: item.capabilities,
+              \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438: item.options_schema,
+              \u0440\u0435\u0436\u0438\u043C\u044B: item.modes,
               \u043D\u0443\u0436\u0435\u043D_\u0430\u0434\u0440\u0435\u0441_\u0441\u0435\u0440\u0432\u0435\u0440\u0430: item.requires_base_url || void 0,
               \u043A\u043B\u044E\u0447\u0438: item.credential_fields.map(
                 (field2) => `${field2.key} \u2014 ${field2.label}` + (field2.required ? " (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E)" : "") + (field2.secret ? ", \u0441\u0435\u043A\u0440\u0435\u0442" : "")
@@ -36762,9 +37069,12 @@ var notificationTools = [
     name: "notifications_settings_save",
     title: "\u041D\u0430\u0441\u0442\u0440\u043E\u0438\u0442\u044C \u0443\u0432\u0435\u0434\u043E\u043C\u043B\u0435\u043D\u0438\u044F",
     kind: "write",
-    description: "\u041C\u0435\u043D\u044F\u0435\u0442 \u0444\u043B\u0430\u0433\u0438 \u0443\u043A\u0430\u0437\u0430\u043D\u043D\u044B\u0445 \u0432\u0438\u0434\u043E\u0432; \u043E\u0441\u0442\u0430\u043B\u044C\u043D\u044B\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F. replace=true \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u0442 \u0432\u0441\u044E \u043A\u0430\u0440\u0442\u0443 \u0438 \u0441\u0431\u0440\u0430\u0441\u044B\u0432\u0430\u0435\u0442 \u043F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043D\u044B\u0435 \u0432\u0438\u0434\u044B \u043A \u0441\u0435\u0440\u0432\u0435\u0440\u043D\u044B\u043C \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F\u043C.",
+    description: "\u041C\u0435\u043D\u044F\u0435\u0442 \u0444\u043B\u0430\u0433\u0438 \u0443\u043A\u0430\u0437\u0430\u043D\u043D\u044B\u0445 \u0432\u0438\u0434\u043E\u0432; \u043E\u0441\u0442\u0430\u043B\u044C\u043D\u044B\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F. \u041E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0435 moderation.* \u043E\u0442\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043D\u0435\u043B\u044C\u0437\u044F. replace=true \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u0442 \u0432\u0441\u044E \u043A\u0430\u0440\u0442\u0443 \u0438 \u0441\u0431\u0440\u0430\u0441\u044B\u0432\u0430\u0435\u0442 \u043F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043D\u044B\u0435 \u0432\u0438\u0434\u044B \u043A \u0441\u0435\u0440\u0432\u0435\u0440\u043D\u044B\u043C \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F\u043C.",
     input: { kinds: external_exports.record(external_exports.string(), external_exports.boolean()), replace: external_exports.boolean().optional() },
     async run(args, ctx) {
+      if (Object.entries(args.kinds).some(([kind, enabled]) => kind.startsWith("moderation.") && !enabled)) {
+        throw new ApiError(400, "required_notification", "\u0423\u0432\u0435\u0434\u043E\u043C\u043B\u0435\u043D\u0438\u044F moderation.* \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u044B \u0438 \u043D\u0435 \u043E\u0442\u043A\u043B\u044E\u0447\u0430\u044E\u0442\u0441\u044F.");
+      }
       const previous = args.replace ? [] : (await ctx.api.get("/notifications/settings")).kinds;
       const kinds = { ...Object.fromEntries(previous.map((item) => [item.kind, item.enabled])), ...args.kinds };
       return report("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B.", await ctx.api.put("/notifications/settings", { kinds }));
