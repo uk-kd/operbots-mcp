@@ -58,8 +58,13 @@ export const NODE_KINDS = [
   'trigger.media',
   'trigger.event',
   'trigger.fallback',
+  'trigger.ai_job',
   'action.message',
   'action.ai',
+  'action.ai_transcribe',
+  'action.ai_speech',
+  'action.ai_video',
+  'action.ai_batch',
   'action.condition',
   'action.switch',
   'action.edit',
@@ -127,7 +132,7 @@ export const MARKET_SOURCES = ['project', 'community'] as const;
 export const MARKET_SORTS = ['popular', 'new', 'likes'] as const;
 
 /** `app/bots/ai/registry.py` — виды подключаемых ИИ-сервисов. */
-export const AI_KINDS = ['gigachat', 'yandexgpt', 'openai', 'openrouter', 'custom'] as const;
+export const AI_KINDS = ['gigachat', 'yandexgpt', 'openai', 'openrouter', 'timeweb', 'custom'] as const;
 
 /** Роли-пресеты, создаваемые в каждом новом деле. */
 export const ROLE_PRESETS = ['owner', 'admin', 'builder', 'operator', 'observer'] as const;
@@ -170,6 +175,7 @@ export const AI_CREDENTIALS: Record<string, string> = {
   yandexgpt: 'api_key (обязательно), folder_id (обязательно)',
   openai: 'api_key (обязательно)',
   openrouter: 'api_key (обязательно)',
+  timeweb: 'api_key (обязательно); режим agent: options.service_type=agent и options.access_id',
   custom: 'api_key (по желанию); обязателен base_url',
 };
 
@@ -182,4 +188,5 @@ export const AI_MODELS: Record<string, string> = {
     'openai/gpt-4o-mini, anthropic/claude-3.5-sonnet, google/gemini-2.0-flash-001, ' +
     'meta-llama/llama-3.3-70b-instruct, deepseek/deepseek-chat',
   custom: 'зависит от вашего сервера; поле обязательно заполнить вручную',
+  timeweb: 'актуальные модели: ai_models; режимы и параметры: operbots_catalog what=ai_kinds kind=timeweb',
 };

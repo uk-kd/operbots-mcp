@@ -62,6 +62,22 @@ test('API redirects cannot forward passwords or uploaded content to another orig
   assert.equal(forwarded, 0);
 });
 
+test('SSE POST preserves body and API errors through the shared HTTP client', async t => {
+  const base = await panel(t, async (request, response) => {
+    let text = '';
+    for await (const chunk of request) text += chunk;
+    assert.equal(request.method, 'POST');
+    assert.equal(request.headers.authorization, 'Bearer opb_TEST_ONLY');
+    assert.deepEqual(JSON.parse(text), { prompt: 'Привет' });
+    if (request.url.endsWith('/denied')) return json(response, { code: 'permission_denied', message: 'Denied', details: { required: ['ai.manage'] } }, 403);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.end('data: {"done":true}\n\n');
+  });
+  const api = client(config(base, 'unused'));
+  assert.equal(await api.postText('/stream', { prompt: 'Привет' }), 'data: {"done":true}\n\n');
+  await assert.rejects(api.postText('/denied', { prompt: 'Привет' }), error => error instanceof ApiError && error.details.required[0] === 'ai.manage');
+});
+
 async function panel(t, handler) {
   const server = createServer(handler);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

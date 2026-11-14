@@ -35,6 +35,9 @@ interface AIKind {
   models: string[];
   credential_fields: { key: string; label: string; secret?: boolean; required?: boolean }[];
   requires_base_url: boolean;
+  capabilities?: string[];
+  options_schema?: Record<string, unknown>;
+  modes?: Record<string, unknown>[];
 }
 
 interface Platform {
@@ -80,7 +83,7 @@ export const catalogTools: Tool[] = [
     input: {
       case: caseField.describe('Для node_kinds: дело с настроенными расширениями.'),
       what: z
-        .enum(['platforms', 'node_kinds', 'market_categories', 'ai_kinds', 'permissions'])
+        .enum(['platforms', 'node_kinds', 'market_categories', 'case_templates', 'ai_kinds', 'permissions'])
         .describe('Какой справочник показать.'),
       kind: z
         .string()
@@ -104,6 +107,8 @@ export const catalogTools: Tool[] = [
     },
     async run(args, ctx) {
       switch (args.what) {
+        case 'case_templates':
+          return report('Шаблоны дел; используйте key в cases_save template_key.', await ctx.api.get('/cases/templates'));
         case 'platforms': {
           const list = await ctx.api.get<Platform[]>('/platforms');
           return report(
@@ -196,6 +201,9 @@ export const catalogTools: Tool[] = [
               документация: item.docs_url,
               модель_по_умолчанию: item.default_model,
               модели: item.models,
+              возможности: item.capabilities,
+              настройки: item.options_schema,
+              режимы: item.modes,
               нужен_адрес_сервера: item.requires_base_url || undefined,
               ключи: item.credential_fields.map(
                 (field) =>

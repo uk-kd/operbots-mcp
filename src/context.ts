@@ -161,6 +161,11 @@ export class Context {
 export function pickByName<T extends { id: string; name: string }>(list: T[], wanted: string): T {
   const needle = wanted.trim().toLowerCase();
   if (!needle) throw new ApiError(400, 'name_required', 'Укажите название или идентификатор.');
+  if (UUID.test(needle)) {
+    const found = list.find(item => item.id.toLowerCase() === needle);
+    if (found) return found;
+    throw new ApiError(404, 'not_found', `Запись с идентификатором ${wanted} не найдена.`);
+  }
 
   const exact = list.filter((item) => item.name.toLowerCase() === needle);
   if (exact.length === 1 && exact[0]) return exact[0];

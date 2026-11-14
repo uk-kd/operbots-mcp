@@ -12,6 +12,7 @@ import { AI_CREDENTIALS, AI_KINDS, AI_MODELS } from '../enums.js';
 import { report } from '../format.js';
 import { caseField, body, tool, type Tool } from './kit.js';
 import { findProvider } from './bots.js';
+import { aiMediaTools } from './ai-media.js';
 
 interface Provider {
   id: string;
@@ -50,6 +51,7 @@ const show = (provider: Provider) => ({
 });
 
 export const aiTools: Tool[] = [
+  ...aiMediaTools,
   tool({
     name: 'ai_list',
     title: 'Подключения к ИИ-сервисам',
@@ -222,6 +224,7 @@ export const aiTools: Tool[] = [
         reply: string | null;
         error: string | null;
         latency_ms: number | null;
+        response_id?: string | null;
       }>(`/cases/${found.id}/ai-providers/${provider.id}/test`, body({ prompt: args.prompt }));
 
       if (!result.ok) {
@@ -234,6 +237,7 @@ export const aiTools: Tool[] = [
       return report(`Подключение «${provider.name}» работает.`, {
         ответ: result.reply,
         задержка_мс: result.latency_ms,
+        response_id: result.response_id,
       });
     },
   }),

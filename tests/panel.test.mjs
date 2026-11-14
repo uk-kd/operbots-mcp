@@ -99,6 +99,13 @@ test('notification read rejects mixed individual and entire-feed selection', asy
   assert.equal(ctx.calls.length, 0);
 });
 
+test('required moderation notices cannot be disabled through MCP', async () => {
+  const tools = await load('notifications', 'notificationTools');
+  const ctx = context();
+  await assert.rejects(invoke(tools, 'notifications_settings_save', { kinds: { 'moderation.warning': false }, replace: true }, ctx), /обязательн/i);
+  assert.equal(ctx.calls.length, 0);
+});
+
 test('AI usage preserves arbitrary backend choice keys and complete report', async () => {
   const ctx = context({ [`get /cases/${caseId}/ai-usage`]: { totals: { total_tokens: 42 }, choices: { providers: [{ key: 'removed', title: 'Old' }] } } });
   const text = await invoke(aiTools, 'ai_usage', { days: 180, provider: 'removed', bot: 'none', kind: 'summary', model: 'qa/model' }, ctx);
@@ -145,6 +152,15 @@ test('case creation applies update-only settings after creating', async () => {
   await invoke(caseTools, 'cases_save', { name: 'QA', settings: { custom: false } }, ctx);
   assert.deepEqual(ctx.calls[0], ['post', '/cases', { name: 'QA' }]);
   assert.deepEqual(ctx.calls[1], ['patch', `/cases/${caseId}`, { settings: { custom: false } }]);
+});
+
+test('case templates and example choice are creation-only and never silently dropped', async () => {
+  const ctx = context({ 'post /cases': { id: caseId, name: 'QA' } });
+  await invoke(caseTools, 'cases_save', { name: 'QA', template_key: 'support', include_examples: false }, ctx);
+  assert.deepEqual(ctx.calls[0], ['post', '/cases', { name: 'QA', template_key: 'support', include_examples: false }]);
+  ctx.calls.length = 0;
+  await assert.rejects(invoke(caseTools, 'cases_save', { case: 'QA', template_key: 'support' }, ctx), /создани/);
+  assert.equal(ctx.calls.length, 0);
 });
 
 test('case card fetches full presentation and settings from current backend', async () => {

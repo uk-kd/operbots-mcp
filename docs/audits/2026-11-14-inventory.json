@@ -1,0 +1,683 @@
+{
+  "tools": 159,
+  "counts": {
+    "read": 59,
+    "write": 67,
+    "danger": 33
+  },
+  "readOnlyTools": 61,
+  "withoutExplicitReferences": [
+    "sessions_list",
+    "sessions_revoke",
+    "account_update",
+    "account_security",
+    "cases_list",
+    "cases_delete",
+    "cases_leave",
+    "members_remove",
+    "case_transfer",
+    "bots_list",
+    "bots_journal",
+    "bots_control",
+    "bots_reveal_token",
+    "bots_webhook_check",
+    "bots_webhook_rotate",
+    "bots_delete",
+    "flows_list",
+    "flows_versions",
+    "flows_restore",
+    "market_like",
+    "market_release",
+    "market_update",
+    "market_unpublish",
+    "dialogs_export",
+    "dialogs_reset_stage",
+    "replies_list",
+    "broadcasts_cancel",
+    "knowledge_reindex",
+    "ai_list",
+    "ai_test",
+    "extensions_get",
+    "extensions_templates",
+    "extensions_oauth_begin",
+    "notifications_summary"
+  ],
+  "toolInventory": [
+    {
+      "name": "operbots_catalog",
+      "kind": "read"
+    },
+    {
+      "name": "operbots_login",
+      "kind": "write"
+    },
+    {
+      "name": "operbots_logout",
+      "kind": "danger"
+    },
+    {
+      "name": "whoami",
+      "kind": "read"
+    },
+    {
+      "name": "sessions_list",
+      "kind": "read"
+    },
+    {
+      "name": "sessions_revoke",
+      "kind": "danger"
+    },
+    {
+      "name": "account_update",
+      "kind": "write"
+    },
+    {
+      "name": "account_appearance",
+      "kind": "write"
+    },
+    {
+      "name": "account_password",
+      "kind": "danger"
+    },
+    {
+      "name": "users_search",
+      "kind": "read"
+    },
+    {
+      "name": "account_security",
+      "kind": "read"
+    },
+    {
+      "name": "cases_list",
+      "kind": "read"
+    },
+    {
+      "name": "cases_get",
+      "kind": "read"
+    },
+    {
+      "name": "cases_save",
+      "kind": "write"
+    },
+    {
+      "name": "cases_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "audit_list",
+      "kind": "read"
+    },
+    {
+      "name": "audit_filters",
+      "kind": "read"
+    },
+    {
+      "name": "cases_leave",
+      "kind": "danger"
+    },
+    {
+      "name": "members_list",
+      "kind": "read"
+    },
+    {
+      "name": "members_save",
+      "kind": "write"
+    },
+    {
+      "name": "members_remove",
+      "kind": "danger"
+    },
+    {
+      "name": "case_transfer",
+      "kind": "danger"
+    },
+    {
+      "name": "roles_save",
+      "kind": "write"
+    },
+    {
+      "name": "roles_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "invites_create",
+      "kind": "write"
+    },
+    {
+      "name": "invites_get",
+      "kind": "read"
+    },
+    {
+      "name": "invites_accept",
+      "kind": "write"
+    },
+    {
+      "name": "invites_revoke",
+      "kind": "danger"
+    },
+    {
+      "name": "bots_list",
+      "kind": "read"
+    },
+    {
+      "name": "bots_get",
+      "kind": "read"
+    },
+    {
+      "name": "bots_status",
+      "kind": "read"
+    },
+    {
+      "name": "bots_webhook_info",
+      "kind": "read"
+    },
+    {
+      "name": "bots_journal",
+      "kind": "read"
+    },
+    {
+      "name": "bots_save",
+      "kind": "write"
+    },
+    {
+      "name": "bots_control",
+      "kind": "write"
+    },
+    {
+      "name": "bots_commands_apply",
+      "kind": "write"
+    },
+    {
+      "name": "bots_variables_set",
+      "kind": "write"
+    },
+    {
+      "name": "bots_reveal_token",
+      "kind": "danger"
+    },
+    {
+      "name": "bots_webhook_check",
+      "kind": "read"
+    },
+    {
+      "name": "bots_webhook_rotate",
+      "kind": "danger"
+    },
+    {
+      "name": "bots_detach",
+      "kind": "danger"
+    },
+    {
+      "name": "bots_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "flows_list",
+      "kind": "read"
+    },
+    {
+      "name": "flows_get",
+      "kind": "read"
+    },
+    {
+      "name": "flows_save",
+      "kind": "write"
+    },
+    {
+      "name": "flows_publish",
+      "kind": "write"
+    },
+    {
+      "name": "flows_versions",
+      "kind": "read"
+    },
+    {
+      "name": "flows_restore",
+      "kind": "write"
+    },
+    {
+      "name": "flows_simulate",
+      "kind": "write"
+    },
+    {
+      "name": "flows_export",
+      "kind": "read"
+    },
+    {
+      "name": "flows_import",
+      "kind": "write"
+    },
+    {
+      "name": "flows_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "market_list",
+      "kind": "read"
+    },
+    {
+      "name": "market_get",
+      "kind": "read"
+    },
+    {
+      "name": "market_like",
+      "kind": "write"
+    },
+    {
+      "name": "market_install",
+      "kind": "write"
+    },
+    {
+      "name": "market_publish",
+      "kind": "write"
+    },
+    {
+      "name": "market_release",
+      "kind": "write"
+    },
+    {
+      "name": "market_update",
+      "kind": "write"
+    },
+    {
+      "name": "market_unpublish",
+      "kind": "danger"
+    },
+    {
+      "name": "dialogs_list",
+      "kind": "read"
+    },
+    {
+      "name": "dialogs_get",
+      "kind": "read"
+    },
+    {
+      "name": "dialogs_chat_info",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_history",
+      "kind": "read"
+    },
+    {
+      "name": "dialogs_mark_read",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_export",
+      "kind": "read"
+    },
+    {
+      "name": "dialogs_reply",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_reply_file",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_download_attachment",
+      "kind": "read"
+    },
+    {
+      "name": "dialogs_edit_message",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_delete_message",
+      "kind": "danger"
+    },
+    {
+      "name": "dialogs_update",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "tasks_list",
+      "kind": "read"
+    },
+    {
+      "name": "tasks_cancel",
+      "kind": "danger"
+    },
+    {
+      "name": "dialogs_release",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_forget_memory",
+      "kind": "write"
+    },
+    {
+      "name": "dialogs_cancel_scheduled",
+      "kind": "danger"
+    },
+    {
+      "name": "dialogs_reset_stage",
+      "kind": "write"
+    },
+    {
+      "name": "replies_list",
+      "kind": "read"
+    },
+    {
+      "name": "replies_save",
+      "kind": "write"
+    },
+    {
+      "name": "replies_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "broadcasts_list",
+      "kind": "read"
+    },
+    {
+      "name": "broadcasts_get",
+      "kind": "read"
+    },
+    {
+      "name": "broadcasts_targets",
+      "kind": "read"
+    },
+    {
+      "name": "broadcasts_attach",
+      "kind": "write"
+    },
+    {
+      "name": "broadcasts_detach",
+      "kind": "write"
+    },
+    {
+      "name": "broadcasts_preview",
+      "kind": "read"
+    },
+    {
+      "name": "broadcasts_save",
+      "kind": "write"
+    },
+    {
+      "name": "broadcasts_duplicate",
+      "kind": "write"
+    },
+    {
+      "name": "broadcasts_retry",
+      "kind": "danger"
+    },
+    {
+      "name": "broadcasts_test",
+      "kind": "danger"
+    },
+    {
+      "name": "broadcasts_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "broadcasts_start",
+      "kind": "danger"
+    },
+    {
+      "name": "broadcasts_cancel",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_list",
+      "kind": "read"
+    },
+    {
+      "name": "knowledge_save",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_add_document",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_document",
+      "kind": "read"
+    },
+    {
+      "name": "knowledge_document_update",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_reindex",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_search",
+      "kind": "write"
+    },
+    {
+      "name": "knowledge_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "ai_models",
+      "kind": "write"
+    },
+    {
+      "name": "ai_stream",
+      "kind": "write"
+    },
+    {
+      "name": "ai_speech",
+      "kind": "write"
+    },
+    {
+      "name": "ai_transcribe",
+      "kind": "write"
+    },
+    {
+      "name": "ai_files_list",
+      "kind": "read"
+    },
+    {
+      "name": "ai_files_get",
+      "kind": "read"
+    },
+    {
+      "name": "ai_files_upload",
+      "kind": "write"
+    },
+    {
+      "name": "ai_files_refresh",
+      "kind": "write"
+    },
+    {
+      "name": "ai_files_download",
+      "kind": "read"
+    },
+    {
+      "name": "ai_files_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "ai_jobs_list",
+      "kind": "read"
+    },
+    {
+      "name": "ai_jobs_get",
+      "kind": "read"
+    },
+    {
+      "name": "ai_jobs_create",
+      "kind": "write"
+    },
+    {
+      "name": "ai_jobs_cancel",
+      "kind": "danger"
+    },
+    {
+      "name": "ai_jobs_candidates",
+      "kind": "write"
+    },
+    {
+      "name": "ai_jobs_reconcile",
+      "kind": "write"
+    },
+    {
+      "name": "ai_list",
+      "kind": "read"
+    },
+    {
+      "name": "ai_save",
+      "kind": "write"
+    },
+    {
+      "name": "ai_usage",
+      "kind": "read"
+    },
+    {
+      "name": "ai_test",
+      "kind": "write"
+    },
+    {
+      "name": "ai_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "requests_list",
+      "kind": "read"
+    },
+    {
+      "name": "requests_get",
+      "kind": "read"
+    },
+    {
+      "name": "requests_save",
+      "kind": "write"
+    },
+    {
+      "name": "requests_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "requests_types_list",
+      "kind": "read"
+    },
+    {
+      "name": "requests_types_save",
+      "kind": "write"
+    },
+    {
+      "name": "requests_types_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "requests_tasks_list",
+      "kind": "read"
+    },
+    {
+      "name": "requests_task_complete",
+      "kind": "write"
+    },
+    {
+      "name": "requests_comment",
+      "kind": "write"
+    },
+    {
+      "name": "requests_workflow",
+      "kind": "write"
+    },
+    {
+      "name": "requests_cancel",
+      "kind": "danger"
+    },
+    {
+      "name": "counterparties_list",
+      "kind": "read"
+    },
+    {
+      "name": "counterparties_get",
+      "kind": "read"
+    },
+    {
+      "name": "counterparties_save",
+      "kind": "write"
+    },
+    {
+      "name": "counterparties_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "counterparties_settings",
+      "kind": "read"
+    },
+    {
+      "name": "counterparties_settings_save",
+      "kind": "write"
+    },
+    {
+      "name": "counterparties_dialogs",
+      "kind": "read"
+    },
+    {
+      "name": "counterparties_link",
+      "kind": "write"
+    },
+    {
+      "name": "counterparties_unlink",
+      "kind": "write"
+    },
+    {
+      "name": "counterparties_reconcile",
+      "kind": "write"
+    },
+    {
+      "name": "extensions_list",
+      "kind": "read"
+    },
+    {
+      "name": "extensions_get",
+      "kind": "read"
+    },
+    {
+      "name": "extensions_templates",
+      "kind": "read"
+    },
+    {
+      "name": "extensions_nodes",
+      "kind": "read"
+    },
+    {
+      "name": "extensions_save",
+      "kind": "write"
+    },
+    {
+      "name": "extensions_oauth_begin",
+      "kind": "write"
+    },
+    {
+      "name": "extensions_delete",
+      "kind": "danger"
+    },
+    {
+      "name": "notifications_list",
+      "kind": "read"
+    },
+    {
+      "name": "notifications_summary",
+      "kind": "read"
+    },
+    {
+      "name": "notifications_filters",
+      "kind": "read"
+    },
+    {
+      "name": "notifications_read",
+      "kind": "write"
+    },
+    {
+      "name": "notifications_settings",
+      "kind": "read"
+    },
+    {
+      "name": "notifications_settings_save",
+      "kind": "write"
+    }
+  ]
+}
